@@ -173,12 +173,12 @@ def generate_report(results, output_path):
         f.write("## Summary\n\n")
 
         all_passed = all(r["passed"] for r in results)
-        status = "✅ ALL CHECKS PASSED" if all_passed else "❌ SOME CHECKS FAILED"
+        status = "[PASS] ALL CHECKS PASSED" if all_passed else "[FAIL] SOME CHECKS FAILED"
         f.write(f"**Status:** {status}\n\n")
 
         f.write("## Detailed Results\n\n")
         for r in results:
-            icon = "✅" if r["passed"] else "❌"
+            icon = "[PASS]" if r["passed"] else "[FAIL]"
             f.write(f"### {icon} {r['check']}\n\n")
             for k, v in r.items():
                 if k not in ("check", "passed"):
@@ -216,7 +216,7 @@ def main():
     ]
 
     for r in results:
-        icon = "✅" if r["passed"] else "❌"
+        icon = "[PASS]" if r["passed"] else "[FAIL]"
         print(f"  {icon} {r['check']}")
 
     generate_report(results, args.output)

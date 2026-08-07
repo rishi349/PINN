@@ -41,7 +41,7 @@ thermostat:
 # === Integration ===
 integrator:
   type: "overdamped"           # "overdamped" (Brownian) or "underdamped" (Langevin)
-  dt: 0.005                    # τ. §4: "Start conservative (0.001–0.005)"
+  dt: 0.001                    # τ. §4: "Start conservative (0.001–0.005)"
   # Overdamped update (§8.1):
   #   noise = sqrt(2*kBT*dt/gamma) * N(0,1)
   #   r[i] = r[i] + (dt/gamma) * F[i] + noise

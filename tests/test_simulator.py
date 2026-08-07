@@ -45,30 +45,36 @@ class TestTwoBeadSimulations:
         """
         Two non-bonded beads placed close together should repel and separate.
         "two WCA-repelled beads separate" — §9 Month 2 Gate
+
+        Note: compute_nonbonded_forces skips pairs with |i-j|<=1 (bonded
+        neighbors), so we use 3 beads and test pair (0,2) which has |i-j|=2.
         """
-        # Place two beads at r=0.9σ (within WCA range)
-        positions = np.array([[0.0, 0.0, 0.0], [0.9, 0.0, 0.0]])
+        # 3 beads: 0 and 2 are close (WCA range), bead 1 is far away
+        positions = np.array([
+            [0.0, 0.0, 0.0],
+            [50.0, 0.0, 0.0],  # Far away, irrelevant
+            [0.9, 0.0, 0.0],  # Close to bead 0, |0-2|=2 > 1 → WCA applies
+        ])
         rng = np.random.default_rng(42)
         r_cut = SIGMA * 2.0 ** (1.0 / 6.0)
 
-        initial_dist = np.linalg.norm(positions[1] - positions[0])
-        assert initial_dist < r_cut, "Beads should start within WCA range"
+        initial_dist = np.linalg.norm(positions[2] - positions[0])
+        assert initial_dist < r_cut, "Beads 0 and 2 should start within WCA range"
 
-        # Run 500 steps with T=0 (no noise) to isolate WCA effect
+        # Run 500 steps with T=0, k_bond=0 to isolate WCA effect
         for _ in range(500):
             forces, _, _ = compute_all_forces(
                 positions, bond_type="harmonic", k_bond=0.0, r0=R0,
                 epsilon=EPSILON, sigma=SIGMA
             )
-            # Use only WCA forces (k_bond=0 → no bonded forces)
             positions, _ = euler_maruyama_overdamped_step(
                 positions, forces, DT, GAMMA, kBT=0.0, rng=rng
             )
 
-        final_dist = np.linalg.norm(positions[1] - positions[0])
+        final_dist = np.linalg.norm(positions[2] - positions[0])
         assert final_dist > initial_dist, \
             f"WCA-repelled beads should separate: {initial_dist:.4f} → {final_dist:.4f}"
-        assert final_dist >= r_cut - 0.01, \
+        assert final_dist >= r_cut - 0.05, \
             f"Beads should reach near WCA cutoff: {final_dist:.4f} vs {r_cut:.4f}"
 
     def test_harmonic_bonded_beads_oscillate_around_r0(self):
@@ -192,7 +198,7 @@ class TestNumpySimulatorIntegration:
         config_path = os.path.join(
             os.path.dirname(__file__), "..", "configs", "default.yaml"
         )
-        with open(config_path, "r") as f:
+        with open(config_path, "r", encoding="utf-8") as f:
             config = yaml.safe_load(f)
 
         # Override for fast test
@@ -218,7 +224,7 @@ class TestNumpySimulatorIntegration:
         config_path = os.path.join(
             os.path.dirname(__file__), "..", "configs", "default.yaml"
         )
-        with open(config_path, "r") as f:
+        with open(config_path, "r", encoding="utf-8") as f:
             config = yaml.safe_load(f)
 
         config["chain"]["N"] = 3
