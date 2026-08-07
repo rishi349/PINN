@@ -82,3 +82,32 @@ box:
 
 # === Random seed ===
 seed: 42                       # Base seed; each trajectory uses unique_seed(traj_id)
+
+# === Model (Month 3) ===
+model:
+  type: "baseline_gnn"          # Model 1 from README: baseline message-passing GNN
+  hidden_dim: 128               # Hidden dimension for node/edge embeddings
+  n_layers: 4                   # Number of message passing layers
+  dropout: 0.0                  # Dropout rate (0 for baseline)
+  activation: "silu"            # Activation function: silu, relu, gelu, tanh
+  node_input_dim: 4             # position(3) + bead_index(1)
+  edge_input_dim: 5             # displacement(3) + distance(1) + bond_type(1)
+
+# === Training (Month 3) ===
+training:
+  epochs: 200                   # Maximum training epochs
+  batch_size: 32                # Mini-batch size
+  lr: 1.0e-3                    # Initial learning rate
+  weight_decay: 1.0e-5          # L2 regularization
+  scheduler: "cosine"           # LR scheduler: cosine annealing
+  patience: 20                  # Early stopping patience (epochs)
+  physics_loss_weight: 0.0      # 0 for baseline (Model 1), >0 for physics-informed (Model 2)
+
+# === Evaluation (Month 3) ===
+evaluation:
+  rollout_lengths: [100, 500, 1000, 5000]
+  metrics:
+    - "mse"
+    - "bond_length_distribution"
+    - "rg_scaling"
+    - "energy_drift"
