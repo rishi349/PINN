@@ -378,7 +378,7 @@ class NumpySimulator:
             Trajectory data.
         output_dir : str
             Output directory.
-
+            
         Returns
         -------
         filepath : str
@@ -407,5 +407,5 @@ class NumpySimulator:
 
 def load_config(config_path: str) -> Dict[str, Any]:
     """Load a YAML configuration file."""
-    with open(config_path, "r") as f:
+    with open(config_path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
