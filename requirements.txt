@@ -1,0 +1,5 @@
+# pip requirements (for packages not in conda)
+# Core conda dependencies are in environment.yml
+# This file covers pip-only packages
+
+wandb

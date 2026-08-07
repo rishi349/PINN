@@ -1,0 +1,61 @@
+# === Plan document (never push per user instruction) ===
+polymer_gnn_1_year_execution_plan.md
+
+# === Python ===
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+
+# === Conda / Virtual Environments ===
+.conda/
+*.conda
+env/
+venv/
+.venv/
+
+# === Data files (large, stored separately) ===
+data/raw/*.h5
+data/raw/*.hdf5
+data/raw/*.npy
+data/raw/*.npz
+data/processed/*.pt
+data/processed/*.h5
+data/processed/*.hdf5
+
+# === Model checkpoints (large) ===
+models/baseline/*.pt
+models/baseline/*.pth
+models/physics_informed/*.pt
+models/physics_informed/*.pth
+models/egnn/*.pt
+models/egnn/*.pth
+models/momentum_conserving/*.pt
+models/momentum_conserving/*.pth
+
+# === Logs ===
+logs/*.log
+logs/**/*.log
+wandb/
+
+# === IDE / OS ===
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# === Jupyter ===
+.ipynb_checkpoints/
+*.ipynb
+
+# === Misc ===
+*.bak
+*.tmp

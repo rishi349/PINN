@@ -1,0 +1,84 @@
+# Default simulation configuration
+# All values from §4 (Locked Parameter Table) of the execution plan
+# Using reduced units: ε=1.0, σ=1.0, m=1.0, τ=σ√(m/ε)=1.0
+
+# === Chain parameters ===
+chain:
+  N: 30                      # Bead count (main). §4: "Good middle ground"
+  dimension: 3                # 3D simulation
+
+# === Bond potential (harmonic — clean first version per §4 note) ===
+# Harmonic: U = 0.5 * k_bond * (|r_ij| - r0)²
+# Harmonic: F = -k_bond * (|r_ij| - r0) * r_hat_ij
+bond:
+  type: "harmonic"            # "harmonic" or "fene"
+  k_bond: 100.0               # ε/σ². §4: "k_bond ≈ 100 ε/σ² (much stiffer than ε)"
+  r0: 1.0                     # σ. §4: "r₀ = σ = 1.0"
+
+# === FENE parameters (for future use, standard Kremer-Grest) ===
+# FENE: U = -0.5 * k * R0² * ln(1 - (r/R0)²)
+# FENE: F = -k * r / (1 - (r/R0)²)
+fene:
+  k: 30.0                     # ε/σ². §4: "Standard KG value"
+  R0: 1.5                     # σ. §4: "Standard KG value"
+  # Resulting equilibrium bond length with WCA: ≈0.965σ
+
+# === WCA excluded-volume (Weeks-Chandler-Andersen) ===
+# Repulsive LJ, cut at r_cut = 2^(1/6) * σ ≈ 1.122σ
+# U_WCA = 4ε[(σ/r)¹² - (σ/r)⁶] + ε  for r < r_cut
+# F_WCA = 24ε/r * [2(σ/r)¹² - (σ/r)⁶] * r_hat  for r < r_cut
+wca:
+  epsilon: 1.0                 # §4: "Reduced units"
+  sigma: 1.0                   # §4: "Reduced units"
+  # r_cut = 2^(1/6) * sigma ≈ 1.12246σ (computed, not set manually)
+
+# === Thermodynamic parameters ===
+thermostat:
+  kBT: 1.0                    # §4: "Standard reduced units"
+  gamma: 1.0                  # §4: "Start at 1.0; this is also your 4th OOD axis"
+  mass: 1.0                   # Reduced units
+
+# === Integration ===
+integrator:
+  type: "overdamped"           # "overdamped" (Brownian) or "underdamped" (Langevin)
+  dt: 0.005                    # τ. §4: "Start conservative (0.001–0.005)"
+  # Overdamped update (§8.1):
+  #   noise = sqrt(2*kBT*dt/gamma) * N(0,1)
+  #   r[i] = r[i] + (dt/gamma) * F[i] + noise
+
+# === Simulation length ===
+simulation:
+  T_steps: 100000              # Total integration steps
+  n_burnin: 5000               # §4: "≥ a few Rouse times (~N² in reduced units)"
+                                # For N=30: N²=900, use 5000 to be safe
+  save_every: 100              # §4: "every 100 integration steps"
+
+# === Trajectory generation ===
+trajectories:
+  count_pilot: 25              # §4: "20–30" for pilot validation
+  count_production: 500        # §4: "400–600" for production
+  count_ood: 125               # §4: "100–150 each" for OOD arms
+
+# === Data split ===
+split:
+  train: 0.70                  # §4: "70% / 15% / 15%"
+  val: 0.15
+  test: 0.15
+  by: "trajectory"             # §4: "By trajectory, never by frame"
+
+# === Neighbor cutoff for nonbonded graph edges ===
+graph:
+  neighbor_cutoff: 2.5         # σ. Include WCA + some buffer for graph connectivity
+
+# === Chain initialization ===
+initialization:
+  method: "linear"             # "linear" (stretched) or "random_walk"
+  spacing: 1.0                 # Initial bead spacing (σ)
+
+# === Box size ===
+box:
+  L: 100.0                     # Large box to avoid periodic boundary effects for single chain
+  periodic: true               # Boundary conditions
+
+# === Random seed ===
+seed: 42                       # Base seed; each trajectory uses unique_seed(traj_id)

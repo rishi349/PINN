@@ -1,0 +1,20 @@
+name: polymer-gnn
+channels:
+  - conda-forge
+  - pytorch
+  - pyg
+  - defaults
+dependencies:
+  - python=3.12
+  - hoomd
+  - numpy
+  - scipy
+  - matplotlib
+  - pyyaml
+  - h5py
+  - pytest
+  - pytorch::pytorch
+  - pyg::pyg
+  - pip
+  - pip:
+    - wandb
