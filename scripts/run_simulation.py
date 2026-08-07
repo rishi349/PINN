@@ -51,6 +51,18 @@ def main():
         help="Override base random seed (default: from config)"
     )
     parser.add_argument(
+        "--t-steps", type=int, default=None,
+        help="Override total simulation timesteps (T_steps)"
+    )
+    parser.add_argument(
+        "--n-burnin", type=int, default=None,
+        help="Override burn-in timesteps (n_burnin)"
+    )
+    parser.add_argument(
+        "--save-every", type=int, default=None,
+        help="Override frame saving frequency (save_every)"
+    )
+    parser.add_argument(
         "--quiet", action="store_true",
         help="Suppress progress output"
     )
@@ -62,6 +74,12 @@ def main():
 
     if args.seed is not None:
         config["seed"] = args.seed
+    if args.t_steps is not None:
+        config["simulation"]["T_steps"] = args.t_steps
+    if args.n_burnin is not None:
+        config["simulation"]["n_burnin"] = args.n_burnin
+    if args.save_every is not None:
+        config["simulation"]["save_every"] = args.save_every
 
     # Select simulator
     if args.simulator == "numpy":
