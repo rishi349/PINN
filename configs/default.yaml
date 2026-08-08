@@ -56,7 +56,7 @@ simulation:
 # === Trajectory generation ===
 trajectories:
   count_pilot: 25              # §4: "20–30" for pilot validation
-  count_production: 500        # §4: "400–600" for production
+  count_production: 150        # Plan: 150–250 (scaled down from original 500 for compute budget)
   count_ood: 125               # §4: "100–150 each" for OOD arms
 
 # === Data split ===
