@@ -6,6 +6,10 @@ including SHA256 checksums for data provenance tracking.
 
 Supports both JSON (human-readable, for pilot data) and NumPy npz
 (compact, for production data) formats.
+
+Checksum strategy: checksums are written to sidecar files (.sha256) to
+avoid the circular dependency of embedding a checksum inside the file
+it checksums. verify_checksum() reads the sidecar.
 """
 
 import hashlib
@@ -23,6 +27,9 @@ def save_trajectory_json(
     """
     Save a trajectory as JSON with SHA256 checksum (§5.1).
 
+    The checksum is stored in a sidecar file (.sha256) to avoid the
+    circular dependency of embedding a hash inside the file it hashes.
+
     Parameters
     ----------
     trajectory : dict
@@ -39,16 +46,18 @@ def save_trajectory_json(
     traj_id = trajectory["metadata"]["traj_id"]
     filepath = os.path.join(output_dir, f"trajectory_{traj_id:04d}.json")
 
+    # Write trajectory data (single write, final contents)
     with open(filepath, "w") as f:
         json.dump(trajectory, f, indent=2)
 
-    # §5.1: SHA256 checksum
+    # §5.1: compute checksum of the final file and write to sidecar
     checksum = compute_file_checksum(filepath)
-    trajectory["metadata"]["sha256_checksum"] = checksum
+    sidecar_path = filepath + ".sha256"
+    with open(sidecar_path, "w") as f:
+        f.write(checksum)
 
-    # Re-save with checksum
-    with open(filepath, "w") as f:
-        json.dump(trajectory, f, indent=2)
+    # Store in metadata dict for in-memory use (not re-saved to file)
+    trajectory["metadata"]["sha256_checksum"] = checksum
 
     return filepath
 
@@ -113,8 +122,12 @@ def save_trajectory_npz(
         metadata=json.dumps(trajectory["metadata"]),
     )
 
-    # §5.1: checksum
+    # §5.1: compute checksum and write to sidecar
     checksum = compute_file_checksum(filepath)
+    sidecar_path = filepath + ".sha256"
+    with open(sidecar_path, "w") as f:
+        f.write(checksum)
+
     trajectory["metadata"]["sha256_checksum"] = checksum
 
     return filepath
@@ -158,12 +171,22 @@ def compute_file_checksum(filepath: str) -> str:
     return sha256.hexdigest()
 
 
-def verify_checksum(filepath: str, expected_checksum: str) -> bool:
+def verify_checksum(filepath: str, expected_checksum: str = None) -> bool:
     """
     Verify file integrity using SHA256 checksum (§13.2).
+
+    If expected_checksum is not provided, reads it from the sidecar
+    file (filepath + ".sha256").
 
     §13.2: "Confirm the SHA256 checksums recorded in §5.1 match the
     actual files on disk before starting any expensive training run"
     """
+    if expected_checksum is None:
+        sidecar_path = filepath + ".sha256"
+        if not os.path.exists(sidecar_path):
+            return False
+        with open(sidecar_path, "r") as f:
+            expected_checksum = f.read().strip()
+
     actual = compute_file_checksum(filepath)
     return actual == expected_checksum

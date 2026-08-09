@@ -372,6 +372,9 @@ class NumpySimulator:
         """
         Save trajectory to disk and compute SHA256 checksum (§5.1).
 
+        Checksum is stored in a sidecar file (.sha256) to avoid the
+        circular dependency of embedding a hash inside the file it hashes.
+
         Parameters
         ----------
         trajectory : dict
@@ -388,19 +391,22 @@ class NumpySimulator:
         traj_id = trajectory["metadata"]["traj_id"]
         filepath = os.path.join(output_dir, f"trajectory_{traj_id:04d}.json")
 
+        # Single write — final file contents
         with open(filepath, "w") as f:
             json.dump(trajectory, f)
 
-        # §5.1: "sha256_checksum of the raw trajectory file"
+        # §5.1: checksum of the final file, stored in sidecar
         sha256 = hashlib.sha256()
         with open(filepath, "rb") as f:
             for chunk in iter(lambda: f.read(8192), b""):
                 sha256.update(chunk)
-        trajectory["metadata"]["sha256_checksum"] = sha256.hexdigest()
+        checksum = sha256.hexdigest()
 
-        # Re-save with checksum included
-        with open(filepath, "w") as f:
-            json.dump(trajectory, f)
+        sidecar_path = filepath + ".sha256"
+        with open(sidecar_path, "w") as f:
+            f.write(checksum)
+
+        trajectory["metadata"]["sha256_checksum"] = checksum
 
         return filepath
 
