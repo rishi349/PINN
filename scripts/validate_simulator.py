@@ -194,8 +194,8 @@ def main():
                         help="Directory containing trajectory files")
     parser.add_argument("--output", type=str, default="reports/drafts/simulator_validation.md",
                         help="Output path for validation report")
-    parser.add_argument("--expected-bond-length", type=float, default=1.0,
-                        help="Expected mean bond length (1.0 for harmonic, 0.965 for FENE+WCA)")
+    parser.add_argument("--expected-bond-length", type=float, default=1.06,
+                        help="Expected mean bond length (1.06 for harmonic+WCA, 0.965 for FENE+WCA)")
     args = parser.parse_args()
 
     print(f"Loading trajectories from {args.data_dir}...")

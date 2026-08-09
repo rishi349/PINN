@@ -14,6 +14,7 @@ bond:
   type: "harmonic"            # "harmonic" or "fene"
   k_bond: 100.0               # ε/σ². §4: "k_bond ≈ 100 ε/σ² (much stiffer than ε)"
   r0: 1.0                     # σ. §4: "r₀ = σ = 1.0"
+                               # Note: emergent mean bond length with WCA is ~1.06σ (WCA still repels at r₀)
 
 # === FENE parameters (for future use, standard Kremer-Grest) ===
 # FENE: U = -0.5 * k * R0² * ln(1 - (r/R0)²)
