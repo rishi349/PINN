@@ -344,23 +344,40 @@ def compute_bonded_forces(
     """
     N, dim = positions.shape
     forces = np.zeros_like(positions)
+    
+    # Vectorized computation for all N-1 bonds
+    r_ij = positions[1:] - positions[:-1]  # Vectors from i to i+1
+    dist = np.linalg.norm(r_ij, axis=1)
+    
+    nonzero = dist > 1e-12
+    r_hat = np.zeros_like(r_ij)
+    r_hat[nonzero] = r_ij[nonzero] / dist[nonzero, np.newaxis]
+    
+    f_bond = np.zeros_like(r_ij)
     pe = 0.0
+    
+    if bond_type == "harmonic":
+        f_mag = k_bond * (dist - r0)
+        f_bond[nonzero] = f_mag[nonzero, np.newaxis] * r_hat[nonzero]
+        pe = float(np.sum(0.5 * k_bond * (dist - r0) ** 2))
+    elif bond_type == "fene":
+        ratio_sq = (dist / R0_fene) ** 2
+        if np.any(ratio_sq >= 1.0):
+            max_dist = np.max(dist)
+            raise ValueError(
+                f"FENE bond exceeded maximum extension: max |r_ij|={max_dist:.6f} >= R0={R0_fene:.6f}. "
+                f"This indicates dt is too large or a numerical blow-up."
+            )
+        denominator = 1.0 - ratio_sq
+        f_mag = k_fene * dist / denominator
+        f_bond[nonzero] = f_mag[nonzero, np.newaxis] * r_hat[nonzero]
+        pe = float(np.sum(-0.5 * k_fene * R0_fene**2 * np.log(denominator)))
+    else:
+        raise ValueError(f"Unknown bond type: {bond_type}")
 
-    for i in range(N - 1):
-        r_ij = positions[i + 1] - positions[i]  # Vector from i to i+1
-
-        if bond_type == "harmonic":
-            f_bond = harmonic_bond_force(r_ij, k_bond, r0)
-            pe += harmonic_bond_potential(r_ij, k_bond, r0)
-        elif bond_type == "fene":
-            f_bond = fene_bond_force(r_ij, k_fene, R0_fene)
-            pe += fene_bond_potential(r_ij, k_fene, R0_fene)
-        else:
-            raise ValueError(f"Unknown bond type: {bond_type}")
-
-        # §8.1: F[i] += F_bond; F[i+1] -= F_bond (Newton's 3rd law)
-        forces[i] += f_bond
-        forces[i + 1] -= f_bond
+    # §8.1: F[i] += F_bond; F[i+1] -= F_bond (Newton's 3rd law)
+    forces[:-1] += f_bond
+    forces[1:] -= f_bond
 
     return forces, pe
 
@@ -404,17 +421,37 @@ def compute_nonbonded_forces(
     pe = 0.0
     r_cut = sigma * 2.0 ** (1.0 / 6.0)
 
-    # §8.1: "for all nonbonded pairs (i,j) with |i-j| > 1"
-    for i in range(N):
-        for j in range(i + 2, N):  # |i-j| > 1 → skip direct neighbors
-            r_ij = positions[j] - positions[i]
-            dist = np.linalg.norm(r_ij)
-
-            if dist < r_cut:
-                f_wca = wca_force(r_ij, epsilon, sigma)
-                forces[i] += f_wca
-                forces[j] -= f_wca  # Newton's 3rd law
-                pe += wca_potential(r_ij, epsilon, sigma)
+    # Vectorized computation over all nonbonded pairs (j > i + 1)
+    i_idx, j_idx = np.triu_indices(N, k=2)
+    if len(i_idx) == 0:
+        return forces, pe
+        
+    r_ij = positions[j_idx] - positions[i_idx]
+    dist = np.linalg.norm(r_ij, axis=1)
+    
+    mask = (dist < r_cut) & (dist > 1e-12)
+    if not np.any(mask):
+        return forces, pe
+        
+    r_ij_active = r_ij[mask]
+    dist_active = dist[mask]
+    i_idx_active = i_idx[mask]
+    j_idx_active = j_idx[mask]
+    
+    sr6 = (sigma / dist_active) ** 6
+    sr12 = sr6 ** 2
+    
+    force_factor = 24.0 * epsilon / dist_active * (2.0 * sr12 - sr6)
+    r_hat = r_ij_active / dist_active[:, np.newaxis]
+    
+    # F_on_i is repulsive (points away from j = -r_hat)
+    f_wca = -force_factor[:, np.newaxis] * r_hat
+    
+    # Add forces back to original array (Newton's 3rd law)
+    np.add.at(forces, i_idx_active, f_wca)
+    np.subtract.at(forces, j_idx_active, f_wca)
+    
+    pe = float(np.sum(4.0 * epsilon * (sr12 - sr6) + epsilon))
 
     return forces, pe
 
