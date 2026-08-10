@@ -48,11 +48,12 @@ integrator:
   #   r[i] = r[i] + (dt/gamma) * F[i] + noise
 
 # === Simulation length ===
+# Unit conversion: physical_time_τ = n_steps × dt
+# Rouse time for N=30: τ_R ≈ N² = 900τ. Need ≥ 3τ_R burn-in = 2700τ.
 simulation:
-  T_steps: 100000              # Total integration steps
-  n_burnin: 5000               # §4: "≥ a few Rouse times (~N² in reduced units)"
-                                # For N=30: N²=900, use 5000 to be safe
-  save_every: 100              # §4: "every 100 integration steps"
+  T_steps: 3700000               # 3.7M steps × 0.001τ/step = 3700τ total
+  n_burnin: 2700000              # 2.7M steps × 0.001τ/step = 2700τ ≈ 3 Rouse times
+  save_every: 100                # §4: "every 100 integration steps"
 
 # === Trajectory generation ===
 trajectories:
