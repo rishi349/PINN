@@ -4,6 +4,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from src.data.graph_construction import frame_to_pyg_data
+from src.data.normalization import DisplacementNormalizer
 
 class RolloutEvaluator:
     def __init__(
@@ -12,11 +13,13 @@ class RolloutEvaluator:
         n_beads: int = 30,
         neighbor_cutoff: float = 2.5,
         device: str = 'cpu',
+        normalizer: DisplacementNormalizer = None,
     ):
         self.model = model
         self.n_beads = n_beads
         self.neighbor_cutoff = neighbor_cutoff
         self.device = device
+        self.normalizer = normalizer
         self.model.to(self.device)
         self.model.eval()
 
@@ -83,7 +86,10 @@ class RolloutEvaluator:
             ).to(self.device)
             
             with torch.no_grad():
-                pred_displacement = self.model(data).cpu().numpy()
+                pred_tensor = self.model(data)
+                if self.normalizer is not None:
+                    pred_tensor = self.normalizer.denormalize(pred_tensor)
+                pred_displacement = pred_tensor.cpu().numpy()
                 
             current_positions = current_positions + pred_displacement
             trajectory.append(current_positions)

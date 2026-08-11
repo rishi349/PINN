@@ -4,6 +4,7 @@ from torch.utils.data import DataLoader
 from typing import Dict
 import os
 
+from src.data.normalization import DisplacementNormalizer
 from .losses import combined_loss
 
 class Trainer:
@@ -15,6 +16,7 @@ class Trainer:
         config: dict,
         device: str = 'cpu',
         checkpoint_dir: str = 'models/saved',
+        normalizer: DisplacementNormalizer = None,
     ):
         self.model = model.to(device)
         self.train_loader = train_loader
@@ -22,6 +24,7 @@ class Trainer:
         self.config = config
         self.device = device
         self.checkpoint_dir = checkpoint_dir
+        self.normalizer = normalizer
         
         self.epochs = config.get('epochs', 200)
         self.lr = config.get('lr', 1e-3)
@@ -53,6 +56,9 @@ class Trainer:
             pred = self.model(batch)
             target = batch.y
             
+            if self.normalizer is not None:
+                target = self.normalizer.normalize(target)
+            
             # Physics loss placeholder (not yet implemented)
             loss = combined_loss(
                 pred, 
@@ -75,6 +81,9 @@ class Trainer:
                 batch = batch.to(self.device)
                 pred = self.model(batch)
                 target = batch.y
+                
+                if self.normalizer is not None:
+                    target = self.normalizer.normalize(target)
                 
                 loss = combined_loss(
                     pred, 
@@ -124,16 +133,25 @@ class Trainer:
         history['best_epoch'] = best_epoch
         return history
         
-    def save_checkpoint(self, path: str, epoch: int, val_loss: float):
-        torch.save({
+        checkpoint = {
             'epoch': epoch,
             'model_state_dict': self.model.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
             'val_loss': val_loss,
-        }, path)
+        }
+        if self.normalizer is not None:
+            checkpoint['normalizer_mean'] = self.normalizer.mean
+            checkpoint['normalizer_std'] = self.normalizer.std
+            
+        torch.save(checkpoint, path)
         
     def load_checkpoint(self, path: str):
         checkpoint = torch.load(path, map_location=self.device)
         self.model.load_state_dict(checkpoint['model_state_dict'])
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        
+        if 'normalizer_mean' in checkpoint and self.normalizer is not None:
+            self.normalizer.mean = checkpoint['normalizer_mean']
+            self.normalizer.std = checkpoint['normalizer_std']
+            
         return checkpoint
