@@ -132,7 +132,10 @@ class Trainer:
         history['best_val_loss'] = best_val_loss
         history['best_epoch'] = best_epoch
         return history
-        
+
+    def save_checkpoint(self, path: str, epoch: int, val_loss: float):
+        """Save model checkpoint with optimizer state and normalizer stats."""
+        os.makedirs(os.path.dirname(path), exist_ok=True)
         checkpoint = {
             'epoch': epoch,
             'model_state_dict': self.model.state_dict(),

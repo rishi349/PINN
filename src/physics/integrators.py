@@ -70,7 +70,22 @@ def euler_maruyama_overdamped_step(
 
     # §8.1: r[i] = r[i] + (dt/gamma) * F[i] + noise
     drift = (dt / gamma) * forces
-    new_positions = positions + drift + noise
+    displacement = drift + noise
+
+    # Safety: cap maximum per-bead displacement to prevent rare
+    # catastrophic single-step launches. Without this, WCA close
+    # encounters can produce forces ~10^14, yielding displacements
+    # of ~10^11 σ in a single step. A cap of 0.5σ is conservative
+    # and preserves correct dynamics for all normal configurations.
+    MAX_DISP = 0.5  # σ
+    disp_magnitudes = np.linalg.norm(displacement, axis=1, keepdims=True)
+    clipping_mask = disp_magnitudes > MAX_DISP
+    if np.any(clipping_mask):
+        safe_magnitudes = np.maximum(disp_magnitudes, 1e-30)
+        scale = np.where(clipping_mask, MAX_DISP / safe_magnitudes, 1.0)
+        displacement = displacement * scale
+
+    new_positions = positions + displacement
 
     return new_positions, noise
 
