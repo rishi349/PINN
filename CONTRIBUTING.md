@@ -52,5 +52,6 @@ docs(readme): update setup instructions
 
 - Run `pytest tests/ -v` before any push
 - Force unit tests must pass before simulator work begins
+- **Physics Validation**: Simulator changes must be validated against theoretical distributions by running `python scripts/diagnose_equilibration.py` and `python scripts/verify_remaining.py` before large-scale dataset work begins.
 - Simulator validation must pass before dataset work begins
 - **Do not skip gates** — see §9 in the execution plan
