@@ -79,13 +79,29 @@ class TestLossFunctions:
         # MSE = mean((1-0)^2 + (0-0)^2 + (0-0)^2) = 1/3
         assert loss.item() == pytest.approx(1.0 / 3.0, abs=1e-6)
 
-    def test_bond_length_penalty_placeholder(self):
-        """Bond length penalty should return 0 (placeholder)."""
-        positions = torch.randn(5, 3)
-        displacement = torch.randn(5, 3)
-        bonds = torch.tensor([[0, 1], [1, 2]])
-        loss = bond_length_penalty(positions, displacement, bonds)
-        assert loss.item() == pytest.approx(0.0, abs=1e-7)
+    def test_bond_length_penalty_real_implementation(self):
+        """Bond length penalty should be 0 when bonds are exactly at r0,
+        and positive when bonds deviate from r0."""
+        from src.training.losses import bond_length_penalty
+
+        # Case 1: positions + displacement gives bonds of exactly r0=1.0
+        # Two beads at distance exactly 1.0 apart after displacement
+        positions = torch.tensor([[0.0, 0.0, 0.0], [0.5, 0.0, 0.0]])
+        displacement = torch.tensor([[0.0, 0.0, 0.0], [0.5, 0.0, 0.0]])
+        bonds = torch.tensor([[0, 1]])  # one bond
+        loss = bond_length_penalty(positions, displacement, bonds, r0=1.0)
+        assert loss.item() == pytest.approx(0.0, abs=1e-6), \
+            f"Expected 0 for exact-length bond, got {loss.item()}"
+
+        # Case 2: bond is longer than r0 → penalty > 0
+        positions2 = torch.tensor([[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]])
+        displacement2 = torch.zeros(2, 3)
+        loss2 = bond_length_penalty(positions2, displacement2, bonds, r0=1.0)
+        assert loss2.item() > 0.0, "Expected positive penalty for stretched bond"
+
+        # Case 3: returns a scalar tensor
+        assert loss.dim() == 0
+
 
     def test_combined_loss_no_physics(self):
         """Combined loss with weight=0 should equal MSE."""
