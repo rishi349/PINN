@@ -77,3 +77,110 @@ def compute_rouse_modes(
 # ---------------------------------------------------------------------------
 # Autocorrelation
 # ---------------------------------------------------------------------------
+
+def compute_mode_autocorrelation(
+    modes: np.ndarray,
+    max_lag: Optional[int] = None,
+    subtract_mean: bool = True,
+) -> np.ndarray:
+    """Compute the autocorrelation C_p(τ) = ⟨X_p(t)·X_p(t+τ)⟩ for each mode.
+
+    Parameters
+    ----------
+    modes : np.ndarray, shape (T, n_modes, dim)
+        Rouse mode amplitudes from compute_rouse_modes().
+    max_lag : int, optional
+        Maximum lag τ to compute. Defaults to T//2 for statistical reliability.
+    subtract_mean : bool
+        Whether to subtract the time-mean of X_p before computing correlation
+        (i.e., compute the fluctuation autocorrelation). Default True.
+
+    Returns
+    -------
+    np.ndarray, shape (max_lag, n_modes)
+        C_p(τ) for each mode p, normalised so C_p(0) = 1.
+    """
+    T, n_modes, dim = modes.shape
+    if max_lag is None:
+        max_lag = T // 2
+
+    if subtract_mean:
+        modes = modes - modes.mean(axis=0, keepdims=True)
+
+    # Scalar mode amplitude: take vector dot product over spatial dim
+    # amp[t, p] = X_p(t) · X_p(t)  -- we need the cross-time product
+    # C_p(τ) = (1/(T-τ)) Σ_t  X_p(t) · X_p(t+τ)
+
+    corr = np.zeros((max_lag, n_modes))
+    for lag in range(max_lag):
+        # dot product summed over dim: (T-lag, n_modes)
+        prod = np.sum(modes[:T - lag] * modes[lag:], axis=-1)  # (T-lag, n_modes)
+        corr[lag] = prod.mean(axis=0)
+
+    # Normalise by C_p(0)
+    c0 = corr[0:1]  # (1, n_modes)
+    mask = np.abs(c0) > 1e-12
+    corr = np.where(mask, corr / np.where(mask, c0, 1.0), 0.0)
+    return corr  # (max_lag, n_modes)
+
+
+# ---------------------------------------------------------------------------
+# Relaxation time extraction
+# ---------------------------------------------------------------------------
+
+def extract_relaxation_times(
+    corr: np.ndarray,
+    dt: float = 0.001,
+    fit_range: float = 0.8,
+) -> np.ndarray:
+    """Fit exponential decay to each mode's autocorrelation to get τ_p.
+
+    Fits C_p(τ) = exp(-τ/τ_p) in the range [0, fit_range] of the
+    normalised correlation (i.e., stops fitting once the correlation
+    decays below `fit_range` threshold to avoid fitting noise).
+
+    Parameters
+    ----------
+    corr : np.ndarray, shape (max_lag, n_modes)
+        Normalised mode autocorrelations from compute_mode_autocorrelation().
+    dt : float
+        Time step between frames in simulation time units.
+    fit_range : float
+        Fraction of initial correlation value above which to fit.
+        Default 0.8 means fit while C_p(τ) > 0.8·C_p(0)=0.8.
+
+    Returns
+    -------
+    np.ndarray, shape (n_modes,)
+        Relaxation time τ_p for each mode, in simulation time units.
+        Returns np.nan for modes where the fit fails.
+    """
+    max_lag, n_modes = corr.shape
+    tau_p = np.full(n_modes, np.nan)
+    lags = np.arange(max_lag) * dt
+
+    for p in range(n_modes):
+        c = corr[:, p]
+        # Use only positive-correlation region
+        valid = (c > 0) & (~np.isnan(c))
+        if not np.any(valid):
+            continue
+
+        # Linear fit in log-space:  log C_p(τ) = -τ/τ_p
+        log_c = np.log(np.clip(c[valid], 1e-12, None))
+        t_valid = lags[valid]
+
+        try:
+            coeffs = np.polyfit(t_valid, log_c, 1)
+            slope = coeffs[0]
+            if slope < 0:
+                tau_p[p] = -1.0 / slope
+        except (np.linalg.LinAlgError, ValueError):
+            pass
+
+    return tau_p
+
+
+# ---------------------------------------------------------------------------
+# Rouse scaling check
+# ---------------------------------------------------------------------------
