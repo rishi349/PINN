@@ -184,3 +184,117 @@ def extract_relaxation_times(
 # ---------------------------------------------------------------------------
 # Rouse scaling check
 # ---------------------------------------------------------------------------
+
+def check_rouse_scaling(
+    tau_p: np.ndarray,
+    mode_indices: Optional[np.ndarray] = None,
+    rtol: float = 0.25,
+    min_modes: int = 4,
+) -> dict:
+    """Check whether τ_p ∝ 1/p² as predicted by the Rouse model.
+
+    Fits log(τ_p) = -α·log(p) + const and checks if α ≈ 2.
+
+    Parameters
+    ----------
+    tau_p : np.ndarray, shape (n_modes,)
+        Relaxation times from extract_relaxation_times().
+    mode_indices : np.ndarray, optional
+        Which mode indices to include in the fit. Defaults to p=1..n_modes-1
+        (excluding COM mode p=0 and the highest modes that are noise-dominated).
+    rtol : float
+        Tolerance on the exponent α — passes if |α - 2| / 2 < rtol.
+    min_modes : int
+        Minimum number of valid modes needed to attempt the fit.
+
+    Returns
+    -------
+    dict with keys:
+        'passes'       : bool   — whether τ_p ∝ 1/p² within tolerance
+        'alpha'        : float  — fitted exponent
+        'alpha_target' : float  — theoretical value (2.0)
+        'rtol_used'    : float  — relative tolerance used
+        'n_modes_fit'  : int    — number of modes included in fit
+        'tau_p_fit'    : array  — τ_p values used in fit
+        'p_fit'        : array  — mode indices used in fit
+    """
+    n_modes = len(tau_p)
+
+    if mode_indices is None:
+        # Exclude p=0 (COM) and use only lower half of modes
+        # (high modes have very short τ and are noise-dominated)
+        mode_indices = np.arange(1, max(2, n_modes // 2 + 1))
+
+    # Keep only valid (finite, positive) modes
+    valid = np.isfinite(tau_p[mode_indices]) & (tau_p[mode_indices] > 0)
+    p_fit = mode_indices[valid]
+    tau_fit = tau_p[p_fit]
+
+    result = {
+        'passes': False,
+        'alpha': np.nan,
+        'alpha_target': 2.0,
+        'rtol_used': rtol,
+        'n_modes_fit': len(p_fit),
+        'tau_p_fit': tau_fit,
+        'p_fit': p_fit,
+    }
+
+    if len(p_fit) < min_modes:
+        return result
+
+    # Log-log fit: log(τ) = -α·log(p) + const
+    log_p = np.log(p_fit.astype(float))
+    log_tau = np.log(tau_fit)
+    try:
+        coeffs = np.polyfit(log_p, log_tau, 1)
+        alpha = -coeffs[0]   # negative slope → exponent
+        result['alpha'] = float(alpha)
+        result['passes'] = bool(abs(alpha - 2.0) / 2.0 < rtol)
+    except (np.linalg.LinAlgError, ValueError):
+        pass
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Convenience: full pipeline
+# ---------------------------------------------------------------------------
+
+def full_rouse_analysis(
+    positions_traj: np.ndarray,
+    dt: float = 0.001,
+    n_modes: Optional[int] = None,
+    max_lag: Optional[int] = None,
+) -> dict:
+    """Run the complete Rouse mode analysis pipeline.
+
+    Parameters
+    ----------
+    positions_traj : np.ndarray, shape (T, N, dim)
+        Trajectory of bead positions.
+    dt : float
+        Time step in simulation units.
+    n_modes : int, optional
+        Number of modes to analyse (defaults to N).
+    max_lag : int, optional
+        Maximum lag for autocorrelation (defaults to T//2).
+
+    Returns
+    -------
+    dict with keys:
+        'modes'         : (T, n_modes, dim) — Rouse mode amplitudes
+        'corr'          : (max_lag, n_modes) — normalised autocorrelations
+        'tau_p'         : (n_modes,) — relaxation times in sim. units
+        'scaling_check' : dict from check_rouse_scaling()
+    """
+    modes = compute_rouse_modes(positions_traj, n_modes=n_modes)
+    corr = compute_mode_autocorrelation(modes, max_lag=max_lag)
+    tau_p = extract_relaxation_times(corr, dt=dt)
+    scaling = check_rouse_scaling(tau_p)
+    return {
+        'modes': modes,
+        'corr': corr,
+        'tau_p': tau_p,
+        'scaling_check': scaling,
+    }
