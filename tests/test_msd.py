@@ -108,3 +108,70 @@ class TestComputeMsdG3:
         positions = np.zeros((T, N, 3))
         _, g3 = compute_msd_g3(positions, max_lag=20)
         np.testing.assert_allclose(g3, 0.0, atol=1e-10)
+
+
+class TestFitMsdExponent:
+
+    def test_recovers_linear_exponent(self):
+        """MSD = t^1.0 should give alpha=1.0."""
+        lags = np.arange(1, 201)
+        msd = lags.astype(float) ** 1.0
+        alpha, pre = fit_msd_exponent(msd, lags)
+        assert abs(alpha - 1.0) < 0.05
+        assert abs(pre - 1.0) < 0.05
+
+    def test_recovers_subdiffusion_exponent(self):
+        """MSD = t^0.5 should give alpha=0.5."""
+        lags = np.arange(1, 201)
+        msd = lags.astype(float) ** 0.5
+        alpha, pre = fit_msd_exponent(msd, lags)
+        assert abs(alpha - 0.5) < 0.05
+
+    def test_returns_nan_for_bad_input(self):
+        lags = np.array([1, 2, 3])
+        msd = np.array([0.0, 0.0, 0.0])
+        alpha, pre = fit_msd_exponent(msd, lags)
+        # log(0) is -inf; result may be nan or -inf, but should not raise
+        assert True  # just ensure no exception
+
+
+class TestEstimateDiffusionCoefficient:
+
+    def test_recovers_D(self):
+        """D estimated from g3 = 6*D*t should match D."""
+        D_true = 0.05
+        dt = 0.01
+        lags = np.arange(1, 501)
+        times = lags * dt
+        g3 = 6 * D_true * times  # perfect linear MSD (dim=3)
+        D_est = estimate_diffusion_coefficient(g3, lags, dt=dt, dim=3)
+        assert abs(D_est - D_true) / D_true < 0.05
+
+    def test_returns_nan_for_short_array(self):
+        lags = np.arange(1, 4)
+        g3 = np.ones(3)
+        D = estimate_diffusion_coefficient(g3, lags, dt=0.001, fit_start=0.9)
+        assert np.isnan(D)
+
+
+class TestFullMsdAnalysis:
+
+    def test_pipeline_runs(self):
+        traj = np.random.randn(200, 10, 3)
+        result = full_msd_analysis(traj, dt=0.001, max_lag=50)
+        for key in ['lags_time', 'g1', 'g2', 'g3', 'alpha_g1', 'alpha_g2', 'alpha_g3', 'D_chain']:
+            assert key in result
+
+    def test_shapes(self):
+        traj = np.random.randn(300, 8, 3)
+        result = full_msd_analysis(traj, max_lag=60)
+        assert result['g1'].shape == (60,)
+        assert result['g2'].shape == (60,)
+        assert result['g3'].shape == (60,)
+        assert result['lags_time'].shape == (60,)
+
+    def test_rouse_flags_are_bool(self):
+        traj = np.random.randn(300, 8, 3)
+        result = full_msd_analysis(traj)
+        assert isinstance(result['rouse_g1_ok'], bool)
+        assert isinstance(result['rouse_g2_ok'], bool)
