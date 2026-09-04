@@ -14,8 +14,9 @@ def bond_length_penalty(
     r0: float = 1.0,
     k_penalty: float = 1.0,
 ) -> torch.Tensor:
-    """Placeholder for physics-informed bond loss (Month 4+).
-    Penalizes predicted positions that violate bond length constraints."""
+    """Bond-length penalty for physics-informed training (§8.5).
+    Penalizes predicted positions that violate bond length constraints.
+    TODO: Implement actual bond penalty — currently returns 0 (baseline mode)."""
     return torch.tensor(0.0, device=positions.device, requires_grad=True)
 
 def combined_loss(

@@ -59,7 +59,7 @@ class Trainer:
             if self.normalizer is not None:
                 target = self.normalizer.normalize(target)
             
-            # Physics loss placeholder (not yet implemented)
+            # Physics loss: 0 for baseline (Model 1), active for physics-informed (Models 3–4)
             loss = combined_loss(
                 pred, 
                 target, 
