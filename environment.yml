@@ -6,10 +6,10 @@ channels:
   - defaults
 dependencies:
   - python=3.12
-  - hoomd
-  - numpy
-  - scipy
-  - matplotlib
+  - hoomd                 # TODO: pin to exact version after validation (§5.1)
+  - numpy                 # TODO: pin to exact version (§5.1)
+  - scipy                 # TODO: pin to exact version (§5.1)
+  - matplotlib            # TODO: pin to exact version (§5.1)
   - pyyaml
   - h5py
   - pytest

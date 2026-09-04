@@ -3,23 +3,26 @@
 A controlled study of whether, and how, different ways of injecting physical structure affect long-horizon rollout stability for a coarse-grained polymer chain under overdamped Langevin dynamics.
 
 ## Project Status
-**Phase:** Month 3 (GNN Dataset & Baseline Models)
+**Phase:** Month 5–6 (Baseline GNN Training & Evaluation)
 **Physics Engine:** ✅ Fully Validated (WCA forces clamped, integration stable, Flory exponent matches theory).
-**Next Milestone:** Train baseline message-passing GNN to predict next-step displacements.
+**GNN Pipeline:** ✅ Baseline GNN, training loop, dataset, normalization, and rollout evaluator implemented.
+**Next Milestone:** Rollout evaluation on test set, hyperparameter optimization (Optuna), then freeze baseline architecture.
 
 ## Project Overview
 
 This project compares plain and physics-informed Graph Neural Networks (GNNs) for predicting the dynamics of bead-spring polymer chains. The core question: **does incorporating physics constraints (bond-length conservation, excluded-volume) into the GNN loss function improve long-rollout stability compared to a pure data-driven baseline?**
 
-### Models
+### Models (§10 of execution plan)
 | # | Model | Purpose |
 |---|---|---|
 | 0a | Zero-displacement | Naive baseline |
 | 0b | Global-statistics random draw | Naive baseline |
 | 1 | Baseline message-passing GNN | Fair comparison point |
-| 2 | Physics-informed (bond + excluded-volume losses) | Main comparison |
-| 3 | EGNN (equivariant) | Architectural equivariance test |
-| 4 | Momentum-conserving | Newton's 3rd law enforcement |
+| 2 | Baseline + noise injection | GNS-style rollout robustness test |
+| 3 | Physics-informed (bond loss only) | Isolates bond-length constraint effect |
+| 4 | Physics-informed (bond + excluded-volume) | Main comparison vs baseline |
+| 5 | + momentum-conservation loss | Newton's 3rd law enforcement |
+| 6 | EGNN (equivariant) | Architectural equivariance test |
 
 ### Physics
 - **Dynamics:** Overdamped Langevin (Brownian dynamics)

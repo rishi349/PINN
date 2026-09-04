@@ -1,6 +1,7 @@
 # Project Contract — Locked Decisions
 
 **Date:** 2026-08-07
+**Last Reviewed:** 2026-09-10
 **Status:** LOCKED — do not change without explicit team consensus + supervisor approval
 
 ---
