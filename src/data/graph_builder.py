@@ -21,8 +21,11 @@ Implements §8.3 pseudocode:
             edges.append((i, j, edge_feature))
     return graph(nodes, edges)
 
-This module will be fully implemented in Month 4 (dataset engineering).
-The structure is defined here for completeness.
+This module provides the detailed §8.3 graph representation with the full §5
+node/edge feature schema (including future-proofing fields like bead_type,
+chain_index, bond_order). The lightweight PyG conversion used for actual
+training is in graph_construction.py. This module is retained for JSON-based
+inspection and debugging of graph structure.
 """
 
 import numpy as np
