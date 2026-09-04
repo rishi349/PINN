@@ -1,4 +1,4 @@
-"""Autoregressive rollout evaluator for PINN models."""
+"""Autoregressive rollout evaluator for polymer GNN models (§8.7)."""
 
 import numpy as np
 import torch
