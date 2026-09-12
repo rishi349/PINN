@@ -15,6 +15,18 @@ dependencies:
   - pytest
   - pytorch::pytorch
   - pyg::pyg
+  # --- Plotting & Visualization ---
+  - seaborn               # prettier statistical plots for report figures
+  - plotly                 # interactive rollout visualizations
+  # --- Experiment tracking ---
+  - tensorboard           # local fallback viewer for training curves
   - pip
   - pip:
-    - wandb
+      # --- Experiment Tracking (primary) ---
+      - wandb               # W&B free tier — run dashboard, comparison, sweeps
+      # --- Hyperparameter Optimization ---
+      - optuna              # Bayesian HPO (Month 6), integrates with W&B
+      # --- Equivariant GNN (Month 10) ---
+      - e3nn                # equivariant neural networks for EGNN model
+      # --- 3D Visualization ---
+      - py3Dmol             # 3D polymer chain structure viewer

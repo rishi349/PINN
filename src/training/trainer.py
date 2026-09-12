@@ -1,8 +1,14 @@
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-from typing import Dict
+from typing import Dict, Optional
 import os
+
+try:
+    import wandb
+    WANDB_AVAILABLE = True
+except ImportError:
+    WANDB_AVAILABLE = False
 
 from src.data.normalization import DisplacementNormalizer
 from .losses import combined_loss
@@ -17,6 +23,9 @@ class Trainer:
         device: str = 'cpu',
         checkpoint_dir: str = 'models/saved',
         normalizer: DisplacementNormalizer = None,
+        wandb_enabled: bool = False,
+        wandb_project: str = 'polymer-gnn',
+        wandb_run_name: Optional[str] = None,
     ):
         self.model = model.to(device)
         self.train_loader = train_loader
@@ -45,6 +54,17 @@ class Trainer:
         
         if not os.path.exists(self.checkpoint_dir):
             os.makedirs(self.checkpoint_dir, exist_ok=True)
+
+        # --- W&B Experiment Tracking ---
+        self.wandb_enabled = wandb_enabled and WANDB_AVAILABLE
+        if self.wandb_enabled:
+            wandb.init(
+                project=wandb_project,
+                name=wandb_run_name,
+                config=config,
+                reinit=True,
+            )
+            wandb.watch(self.model, log='gradients', log_freq=50)
             
     def train_epoch(self) -> dict:
         self.model.train()
@@ -115,6 +135,16 @@ class Trainer:
             history['val_loss'].append(val_loss)
             
             print(f"Epoch {epoch:03d} | Train Loss: {train_loss:.6f} | Val Loss: {val_loss:.6f} | LR: {current_lr:.6e}")
+
+            # --- W&B Logging ---
+            if self.wandb_enabled:
+                wandb.log({
+                    'epoch': epoch,
+                    'train_loss': train_loss,
+                    'val_loss': val_loss,
+                    'learning_rate': current_lr,
+                    'best_val_loss': best_val_loss,
+                })
             
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
@@ -122,6 +152,15 @@ class Trainer:
                 patience_counter = 0
                 best_model_path = os.path.join(self.checkpoint_dir, 'best_model.pt')
                 self.save_checkpoint(best_model_path, epoch, val_loss)
+
+                # Log best model to W&B as artifact
+                if self.wandb_enabled:
+                    artifact = wandb.Artifact(
+                        f'best-model-epoch-{epoch}', type='model',
+                        description=f'Best model at epoch {epoch}, val_loss={val_loss:.6f}'
+                    )
+                    artifact.add_file(best_model_path)
+                    wandb.log_artifact(artifact)
             else:
                 patience_counter += 1
                 
@@ -131,6 +170,12 @@ class Trainer:
                 
         history['best_val_loss'] = best_val_loss
         history['best_epoch'] = best_epoch
+
+        # Finish W&B run
+        if self.wandb_enabled:
+            wandb.log({'final_best_val_loss': best_val_loss, 'final_best_epoch': best_epoch})
+            wandb.finish()
+
         return history
 
     def save_checkpoint(self, path: str, epoch: int, val_loss: float):
