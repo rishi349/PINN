@@ -11,6 +11,11 @@ dist/
 build/
 *.egg
 
+# === Environment Variables / Secrets ===
+.env
+.env.*
+!.env.example
+
 # === Conda / Virtual Environments ===
 .conda/
 *.conda
