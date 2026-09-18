@@ -79,7 +79,7 @@ def main():
 
     # We will use NumpySimulator just to initialize the parameters and chain
     sim = NumpySimulator(config)
-    seed = sim.base_seed + 999  # Use a distinct diagnostic seed
+    seed = sim.base_seed  # Match the trajectory seed
     rng = np.random.default_rng(seed)
     
     positions = sim.initialize_chain(rng)
