@@ -126,7 +126,11 @@ class HoomdSimulator:
         §2: Uses hoomd.md.methods.Brownian for overdamped dynamics.
         §4: Harmonic bond + WCA pair potential.
         """
-        device = hoomd.device.CPU()
+        try:
+            device = hoomd.device.GPU()
+        except Exception:
+            device = hoomd.device.CPU()
+            
         sim = hoomd.Simulation(device=device, seed=seed)
         sim.create_state_from_snapshot(snapshot)
 
