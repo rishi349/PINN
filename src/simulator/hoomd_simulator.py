@@ -78,6 +78,7 @@ class HoomdSimulator:
         self.init_spacing = config["initialization"]["spacing"]
         self.box_L = config["box"]["L"]
         self.base_seed = config["seed"]
+        self.git_commit = self._get_git_commit()
 
     def _create_initial_snapshot(self, seed: int) -> "hoomd.Snapshot":
         """
@@ -91,13 +92,11 @@ class HoomdSimulator:
         # Generate initial positions
         positions = np.zeros((self.N, 3))
         if self.init_method == "linear":
-            for i in range(self.N):
-                positions[i, 0] = i * self.init_spacing
+            positions[:, 0] = np.arange(self.N) * self.init_spacing
         elif self.init_method == "random_walk":
-            for i in range(1, self.N):
-                step = rng.standard_normal(3)
-                step = step / np.linalg.norm(step) * self.init_spacing
-                positions[i] = positions[i - 1] + step
+            steps = rng.standard_normal((self.N - 1, 3))
+            steps = (steps / np.linalg.norm(steps, axis=1, keepdims=True)) * self.init_spacing
+            positions[1:] = np.cumsum(steps, axis=0)
 
         # Center in box
         positions -= np.mean(positions, axis=0)
@@ -150,8 +149,11 @@ class HoomdSimulator:
         # === WCA pair potential (excluded volume) ===
         # §4: Repulsive LJ cut at 2^(1/6)σ
         r_cut = self.sigma * 2.0 ** (1.0 / 6.0)
-        cell = hoomd.md.nlist.Cell(buffer=0.4)
-        lj = hoomd.md.pair.LJ(nlist=cell, default_r_cut=r_cut)
+        try:
+            nlist = hoomd.md.nlist.Tree(buffer=0.4)
+        except AttributeError:
+            nlist = hoomd.md.nlist.Cell(buffer=0.4)
+        lj = hoomd.md.pair.LJ(nlist=nlist, default_r_cut=r_cut)
         lj.params[("A", "A")] = dict(epsilon=self.epsilon, sigma=self.sigma)
         lj.mode = "shift"  # Shift to zero at cutoff (= WCA)
 
@@ -183,10 +185,8 @@ class HoomdSimulator:
         displacements = positions - com
         Rg_sq = np.mean(np.sum(displacements**2, axis=1))
         Rg = np.sqrt(Rg_sq)
-        bond_lengths = np.array([
-            np.linalg.norm(positions[i + 1] - positions[i])
-            for i in range(self.N - 1)
-        ])
+        bond_vectors = positions[1:] - positions[:-1]
+        bond_lengths = np.linalg.norm(bond_vectors, axis=1)
         return {
             "center_of_mass": com.tolist(),
             "end_to_end_vector": end_to_end_vec.tolist(),
@@ -258,7 +258,7 @@ class HoomdSimulator:
             "numpy_version": np.__version__,
             "platform": platform.platform(),
             "generation_timestamp": datetime.now(timezone.utc).isoformat(),
-            "generating_script_git_commit": self._get_git_commit(),
+            "generating_script_git_commit": self.git_commit,
         }
 
         # Storage
@@ -269,35 +269,42 @@ class HoomdSimulator:
             print(f"[Traj {traj_id}] HOOMD simulation: N={self.N}, "
                   f"T_steps={self.T_steps}, dt={self.dt}, seed={seed}")
 
-        # Run simulation
-        for t in range(1, self.T_steps + 1):
-            sim.run(1)
+        # 1. Run burn-in phase in one fast C++/GPU call
+        if self.n_burnin > 0:
+            sim.run(self.n_burnin)
 
-            if t > self.n_burnin and t % self.save_every == 0:
-                snap = sim.state.get_snapshot()
-                positions = np.array(snap.particles.position[:self.N])
-                observables = self._compute_observables(positions)
+        # 2. Advance simulation in blocks of save_every
+        remaining_steps = self.T_steps - self.n_burnin
+        n_frames_to_save = max(0, remaining_steps // self.save_every)
+        progress_interval = max(1, n_frames_to_save // 10)
 
-                frame = {
-                    "timestep_index": t,
-                    "positions": positions.tolist(),
-                    "forces": [],  # HOOMD doesn't easily expose per-particle forces
-                    "bond_list": bond_list,
-                    "potential_energy_bond": 0.0,  # Would need logger
-                    "potential_energy_nonbond": 0.0,
-                    "potential_energy_total": 0.0,
-                    "is_equilibrated": True,
-                    **observables,
-                }
-                frames.append(frame)
+        for frame_idx in range(1, n_frames_to_save + 1):
+            sim.run(self.save_every)
+            current_t = self.n_burnin + frame_idx * self.save_every
 
-            if verbose and t % (self.T_steps // 10) == 0:
-                snap = sim.state.get_snapshot()
-                positions = np.array(snap.particles.position[:self.N])
-                obs = self._compute_observables(positions)
-                print(f"  Step {t}/{self.T_steps}: "
-                      f"R_g={obs['radius_of_gyration']:.4f}, "
-                      f"mean_bond={obs['mean_bond_length']:.4f}")
+            # Fetch snapshot and compute observables once per frame
+            snap = sim.state.get_snapshot()
+            positions = np.array(snap.particles.position[:self.N])
+            observables = self._compute_observables(positions)
+
+            frame = {
+                "timestep_index": current_t,
+                "positions": positions.tolist(),
+                "forces": [],  # HOOMD doesn't easily expose per-particle forces
+                "bond_list": bond_list,
+                "potential_energy_bond": 0.0,  # Would need logger
+                "potential_energy_nonbond": 0.0,
+                "potential_energy_total": 0.0,
+                "is_equilibrated": True,
+                **observables,
+            }
+            frames.append(frame)
+
+            # Reuse computed observables for verbose logging without extra GPU sync
+            if verbose and (frame_idx % progress_interval == 0 or frame_idx == n_frames_to_save):
+                print(f"  Step {current_t}/{self.T_steps}: "
+                      f"R_g={observables['radius_of_gyration']:.4f}, "
+                      f"mean_bond={observables['mean_bond_length']:.4f}")
 
         trajectory = {
             "metadata": metadata,
@@ -308,13 +315,11 @@ class HoomdSimulator:
         if output_dir is not None:
             os.makedirs(output_dir, exist_ok=True)
             filepath = os.path.join(output_dir, f"trajectory_{traj_id:04d}.json")
-            with open(filepath, "w") as f:
-                json.dump(trajectory, f)
-            checksum = hashlib.sha256(
-                open(filepath, "rb").read()
+            raw_json = json.dumps(trajectory)
+            trajectory["metadata"]["sha256_checksum"] = hashlib.sha256(
+                raw_json.encode("utf-8")
             ).hexdigest()
-            trajectory["metadata"]["sha256_checksum"] = checksum
-            with open(filepath, "w") as f:
+            with open(filepath, "w", encoding="utf-8") as f:
                 json.dump(trajectory, f)
 
         if verbose:
