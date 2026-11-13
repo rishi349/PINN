@@ -29,7 +29,7 @@ All functions operate in reduced units (§4): ε=1.0, σ=1.0, m=1.0.
 """
 
 import numpy as np
-from typing import Tuple
+from typing import Optional, Tuple
 
 
 # =============================================================================
@@ -391,10 +391,74 @@ def compute_bonded_forces(
     return forces, pe
 
 
+# [NEIGHBOR LIST] NEW FUNCTION: build_verlet_neighbor_list
+def build_verlet_neighbor_list(
+    positions: np.ndarray,
+    sigma: float = 1.0,
+    skin: Optional[float] = None,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Build a Verlet neighbor list of nonbonded bead pairs.
+
+    The list contains every pair (i, j) with j >= i + 2 (immediately bonded
+    neighbors |i-j| <= 1 are excluded, exactly as in compute_nonbonded_forces)
+    whose separation is less than
+
+        WCA cutoff + skin = sigma * 2^(1/6) + skin.
+
+    The skin only enlarges the candidate-pair search radius. The physical WCA
+    cutoff (r_cut = sigma * 2^(1/6)) is still applied inside
+    compute_nonbonded_forces using the current positions.
+
+    No periodic boundary / minimum-image handling is applied, consistent with
+    compute_nonbonded_forces.
+
+    Correctness: if the list is rebuilt whenever the maximum displacement of any
+    bead from the positions used here reaches skin / 2, two beads can approach
+    each other by at most < skin between rebuilds, so no pair that was
+    >= r_cut + skin apart at build time can be < r_cut at a later step.
+
+    Pairs are returned in the same (i, j) order as np.triu_indices(N, k=2), so
+    the force accumulation order is unchanged relative to the all-pairs path.
+
+    Parameters
+    ----------
+    positions : np.ndarray, shape (N, dim)
+        Bead positions at which the list is built.
+    sigma : float
+        WCA length scale (same value passed to compute_nonbonded_forces).
+    skin : float, optional
+        Neighbor-list skin distance. Default (None): 0.3 * sigma.
+
+    Returns
+    -------
+    i_idx, j_idx : np.ndarray of int, shape (n_pairs,)
+        Indices of the candidate pairs (i < j, j >= i + 2).
+    """
+    if skin is None:
+        skin = 0.3 * sigma
+    if skin < 0.0:
+        raise ValueError(f"skin must be non-negative, got {skin}")
+
+    N = positions.shape[0]
+    r_cut = sigma * 2.0 ** (1.0 / 6.0)
+    list_cutoff = r_cut + skin
+
+    i_idx, j_idx = np.triu_indices(N, k=2)
+    if len(i_idx) == 0:
+        return i_idx, j_idx
+
+    r_ij = positions[j_idx] - positions[i_idx]
+    dist = np.linalg.norm(r_ij, axis=1)
+    keep = dist < list_cutoff
+    return i_idx[keep], j_idx[keep]
+
+
 def compute_nonbonded_forces(
     positions: np.ndarray,
     epsilon: float = 1.0,
     sigma: float = 1.0,
+    neighbor_pairs: Optional[Tuple[np.ndarray, np.ndarray]] = None,  # [NEIGHBOR LIST] new optional arg
 ) -> Tuple[np.ndarray, float]:
     """
     Compute nonbonded (WCA excluded-volume) forces.
@@ -417,6 +481,11 @@ def compute_nonbonded_forces(
         WCA energy scale.
     sigma : float
         WCA length scale.
+    neighbor_pairs : tuple (i_idx, j_idx) of np.ndarray, optional
+        Precomputed candidate pairs from build_verlet_neighbor_list().
+        If None (default), all nonbonded pairs j > i + 1 are used (original
+        behavior). If given, only these pairs are evaluated; the physical WCA
+        cutoff is still applied to the CURRENT positions.
 
     Returns
     -------
@@ -431,7 +500,11 @@ def compute_nonbonded_forces(
     r_cut = sigma * 2.0 ** (1.0 / 6.0)
 
     # Vectorized computation over all nonbonded pairs (j > i + 1)
-    i_idx, j_idx = np.triu_indices(N, k=2)
+    # [NEIGHBOR LIST] use precomputed pairs if provided, otherwise all pairs (unchanged)
+    if neighbor_pairs is None:
+        i_idx, j_idx = np.triu_indices(N, k=2)
+    else:
+        i_idx, j_idx = neighbor_pairs
     if len(i_idx) == 0:
         return forces, pe
         
@@ -479,6 +552,7 @@ def compute_all_forces(
     R0_fene: float = 1.5,
     epsilon: float = 1.0,
     sigma: float = 1.0,
+    neighbor_pairs: Optional[Tuple[np.ndarray, np.ndarray]] = None,  # [NEIGHBOR LIST] new optional arg
 ) -> Tuple[np.ndarray, float, float]:
     """
     Compute all forces (bonded + nonbonded) on a polymer chain.
@@ -496,6 +570,9 @@ def compute_all_forces(
         Bond parameters (see compute_bonded_forces).
     epsilon, sigma : float
         WCA parameters.
+    neighbor_pairs : tuple (i_idx, j_idx) of np.ndarray, optional
+        Precomputed Verlet neighbor-list pairs (see build_verlet_neighbor_list).
+        If None (default), all nonbonded pairs are evaluated (original behavior).
 
     Returns
     -------
@@ -509,7 +586,10 @@ def compute_all_forces(
     f_bond, pe_bond = compute_bonded_forces(
         positions, bond_type, k_bond, r0, k_fene, R0_fene
     )
-    f_nonbond, pe_nonbond = compute_nonbonded_forces(positions, epsilon, sigma)
+    # [NEIGHBOR LIST] forward neighbor_pairs
+    f_nonbond, pe_nonbond = compute_nonbonded_forces(
+        positions, epsilon, sigma, neighbor_pairs=neighbor_pairs
+    )
 
     total_forces = f_bond + f_nonbond
 

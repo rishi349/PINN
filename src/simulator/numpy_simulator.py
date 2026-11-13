@@ -48,7 +48,8 @@ from typing import Dict, List, Optional, Any
 
 import yaml
 
-from src.physics.forces import compute_all_forces
+# [NEIGHBOR LIST] import the new neighbor-list builder
+from src.physics.forces import compute_all_forces, build_verlet_neighbor_list
 from src.physics.integrators import euler_maruyama_overdamped_step
 
 
@@ -108,6 +109,15 @@ class NumpySimulator:
 
         # === Base seed ===
         self.base_seed = config["seed"]
+
+        # === [NEIGHBOR LIST] Verlet neighbor-list skin distance ===
+        # Optional config key neighbor_list.skin (in σ units of length).
+        # If the section/key is absent or null, defaults to 0.3 * sigma.
+        # This only widens the candidate-pair search radius; it does NOT change
+        # the physical WCA cutoff (2^(1/6) * sigma).
+        _nl_cfg = config.get("neighbor_list") or {}
+        _skin = _nl_cfg.get("skin")
+        self.neighbor_skin = 0.3 * self.sigma if _skin is None else float(_skin)
 
     def initialize_chain(self, rng: np.random.Generator) -> np.ndarray:
         """
@@ -291,6 +301,15 @@ class NumpySimulator:
         # === Initialize chain (§8.1: "Initialize polymer coordinates") ===
         positions = self.initialize_chain(rng)
 
+        # === [NEIGHBOR LIST] Build initial Verlet neighbor list ===
+        neighbor_pairs = build_verlet_neighbor_list(
+            positions, sigma=self.sigma, skin=self.neighbor_skin
+        )
+        # Positions at which the list was built (copy, so later position
+        # updates cannot alias/modify the reference).
+        ref_positions = positions.copy()
+        n_neighbor_rebuilds = 0
+
         # === Build metadata (§5, §5.1) ===
         metadata = self._build_trajectory_metadata(traj_id, seed)
 
@@ -304,6 +323,18 @@ class NumpySimulator:
 
         # === Main simulation loop (§8.1) ===
         for t in range(1, self.T_steps + 1):
+            # === [NEIGHBOR LIST] Rebuild if any bead has moved >= skin/2 ===
+            # Max per-bead displacement from the positions used to build the
+            # list. Checked on the current positions BEFORE the force
+            # evaluation, so the force at this step never uses a stale list.
+            max_disp = np.max(np.linalg.norm(positions - ref_positions, axis=1))
+            if max_disp >= 0.5 * self.neighbor_skin:
+                neighbor_pairs = build_verlet_neighbor_list(
+                    positions, sigma=self.sigma, skin=self.neighbor_skin
+                )
+                ref_positions = positions.copy()
+                n_neighbor_rebuilds += 1
+
             # Compute all forces (§8.1: bonded + excluded-volume)
             forces, pe_bond, pe_nonbond = compute_all_forces(
                 positions,
@@ -314,6 +345,7 @@ class NumpySimulator:
                 R0_fene=self.R0_fene,
                 epsilon=self.epsilon,
                 sigma=self.sigma,
+                neighbor_pairs=neighbor_pairs,  # [NEIGHBOR LIST]
             )
 
             # Overdamped dynamics update (§8.1)
@@ -362,6 +394,9 @@ class NumpySimulator:
             self._save_trajectory(trajectory, output_dir)
 
         if verbose:
+            # [NEIGHBOR LIST] report total number of neighbor-list rebuilds
+            print(f"[Traj {traj_id}] Neighbor list rebuilt {n_neighbor_rebuilds} times "
+                  f"(skin={self.neighbor_skin}).")
             print(f"[Traj {traj_id}] Done. Saved {len(frames)} frames.")
 
         return trajectory

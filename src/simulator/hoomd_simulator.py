@@ -269,11 +269,34 @@ class HoomdSimulator:
             print(f"[Traj {traj_id}] HOOMD simulation: N={self.N}, "
                   f"T_steps={self.T_steps}, dt={self.dt}, seed={seed}")
 
-        # Run simulation
-        for t in range(1, self.T_steps + 1):
-            sim.run(1)
+        # Run simulation in optimized chunks rather than single steps
+        # Phase 1: Burn-in (no frames saved, run in coarse chunks to avoid Python-C++ overhead)
+        if self.n_burnin > 0:
+            burnin_reports = 10
+            burnin_chunk = self.n_burnin // burnin_reports
+            remainder = self.n_burnin % burnin_reports
+            for b_idx in range(burnin_reports):
+                steps_to_run = burnin_chunk + (remainder if b_idx == burnin_reports - 1 else 0)
+                if steps_to_run > 0:
+                    sim.run(steps_to_run)
+                if verbose:
+                    snap = sim.state.get_snapshot()
+                    positions = np.array(snap.particles.position[:self.N])
+                    obs = self._compute_observables(positions)
+                    step_now = min((b_idx + 1) * burnin_chunk, self.n_burnin)
+                    print(f"  [Burn-in] Step {step_now}/{self.n_burnin}: "
+                          f"R_g={obs['radius_of_gyration']:.4f}, "
+                          f"mean_bond={obs['mean_bond_length']:.4f}")
 
-            if t > self.n_burnin and t % self.save_every == 0:
+        # Phase 2: Production (run in chunks of save_every and save frames)
+        prod_steps = self.T_steps - self.n_burnin
+        if prod_steps > 0:
+            n_frames = prod_steps // self.save_every
+            report_interval = max(1, n_frames // 10)
+            for frame_idx in range(1, n_frames + 1):
+                sim.run(self.save_every)
+                t = self.n_burnin + frame_idx * self.save_every
+
                 snap = sim.state.get_snapshot()
                 positions = np.array(snap.particles.position[:self.N])
                 observables = self._compute_observables(positions)
@@ -291,13 +314,15 @@ class HoomdSimulator:
                 }
                 frames.append(frame)
 
-            if verbose and t % (self.T_steps // 10) == 0:
-                snap = sim.state.get_snapshot()
-                positions = np.array(snap.particles.position[:self.N])
-                obs = self._compute_observables(positions)
-                print(f"  Step {t}/{self.T_steps}: "
-                      f"R_g={obs['radius_of_gyration']:.4f}, "
-                      f"mean_bond={obs['mean_bond_length']:.4f}")
+                if verbose and (frame_idx % report_interval == 0 or frame_idx == n_frames):
+                    print(f"  [Production] Step {t}/{self.T_steps}: "
+                          f"R_g={observables['radius_of_gyration']:.4f}, "
+                          f"mean_bond={observables['mean_bond_length']:.4f}")
+
+            # Any remaining steps to reach exact T_steps
+            rem_prod = prod_steps % self.save_every
+            if rem_prod > 0:
+                sim.run(rem_prod)
 
         trajectory = {
             "metadata": metadata,
