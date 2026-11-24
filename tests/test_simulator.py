@@ -267,6 +267,44 @@ class TestNumpySimulatorIntegration:
         for field in required_frame:
             assert field in frame, f"Missing per-frame field: {field}"
 
+    def test_underdamped_simulator_runs(self):
+        """Underdamped Langevin dynamics runs correctly with velocity tracking."""
+        import yaml
+        config_path = os.path.join(
+            os.path.dirname(__file__), "..", "configs", "default.yaml"
+        )
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = yaml.safe_load(f)
+
+        config["chain"]["N"] = 5
+        config["integrator"]["type"] = "underdamped"
+        config["simulation"]["T_steps"] = 300
+        config["simulation"]["n_burnin"] = 50
+        config["simulation"]["save_every"] = 50
+
+        from src.simulator.numpy_simulator import NumpySimulator
+        sim = NumpySimulator(config)
+        trajectory = sim.run(traj_id=2, seed=77, verbose=False)
+
+        assert trajectory["metadata"]["integrator_type"] == "underdamped_langevin"
+        assert trajectory["n_frames"] > 0
+
+        frame0 = trajectory["frames"][0]
+        assert "velocities" in frame0
+        assert len(frame0["velocities"]) == 5
+        assert len(frame0["velocities"][0]) == 3
+        assert "kinetic_energy" in frame0
+        assert frame0["kinetic_energy"] > 0
+        assert "instantaneous_temperature" in frame0
+        assert frame0["instantaneous_temperature"] > 0
+
+        # Check all values finite
+        for f in trajectory["frames"]:
+            pos = np.array(f["positions"])
+            vel = np.array(f["velocities"])
+            assert np.all(np.isfinite(pos)), "Positions must be finite"
+            assert np.all(np.isfinite(vel)), "Velocities must be finite"
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

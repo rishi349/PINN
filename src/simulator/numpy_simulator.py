@@ -50,7 +50,10 @@ import yaml
 
 # [NEIGHBOR LIST] import the new neighbor-list builder
 from src.physics.forces import compute_all_forces, build_verlet_neighbor_list
-from src.physics.integrators import euler_maruyama_overdamped_step
+from src.physics.integrators import (
+    euler_maruyama_overdamped_step,
+    euler_maruyama_underdamped_step,
+)
 
 
 class NumpySimulator:
@@ -119,6 +122,9 @@ class NumpySimulator:
         _skin = _nl_cfg.get("skin")
         self.neighbor_skin = 0.3 * self.sigma if _skin is None else float(_skin)
 
+        # === Cache git commit hash once (§5.1 provenance tracking) ===
+        self.git_commit = self._get_git_commit()
+
     def initialize_chain(self, rng: np.random.Generator) -> np.ndarray:
         """
         Initialize polymer chain coordinates.
@@ -139,15 +145,14 @@ class NumpySimulator:
         positions = np.zeros((self.N, self.dim))
 
         if self.init_method == "linear":
-            # Stretched linear chain along x-axis
-            for i in range(self.N):
-                positions[i, 0] = i * self.init_spacing
+            # Stretched linear chain along x-axis (vectorized)
+            positions[:, 0] = np.arange(self.N) * self.init_spacing
         elif self.init_method == "random_walk":
-            # Random walk with step size = init_spacing
-            for i in range(1, self.N):
-                step = rng.standard_normal(self.dim)
-                step = step / np.linalg.norm(step) * self.init_spacing
-                positions[i] = positions[i - 1] + step
+            # Vectorized random walk with step size = init_spacing
+            steps = rng.standard_normal((self.N - 1, self.dim))
+            step_norms = np.linalg.norm(steps, axis=1, keepdims=True)
+            steps = (steps / np.maximum(step_norms, 1e-12)) * self.init_spacing
+            positions[1:] = np.cumsum(steps, axis=0)
         else:
             raise ValueError(f"Unknown initialization method: {self.init_method}")
 
@@ -186,11 +191,9 @@ class NumpySimulator:
         Rg_sq = np.mean(np.sum(displacements**2, axis=1))
         Rg = np.sqrt(Rg_sq)
 
-        # Bond lengths (§13.1: bond-length histogram)
-        bond_lengths = np.array([
-            np.linalg.norm(positions[i + 1] - positions[i])
-            for i in range(self.N - 1)
-        ])
+        # Bond lengths (§13.1: bond-length histogram) — vectorized SIMD calculation
+        bond_vectors = positions[1:] - positions[:-1]
+        bond_lengths = np.linalg.norm(bond_vectors, axis=1)
 
         return {
             "center_of_mass": com.tolist(),
@@ -232,10 +235,16 @@ class NumpySimulator:
         """
         r_cut = self.sigma * 2.0 ** (1.0 / 6.0)
 
+        integrator_label = (
+            "overdamped_langevin" if self.integrator_type == "overdamped"
+            else "underdamped_langevin" if self.integrator_type == "underdamped"
+            else self.integrator_type
+        )
+
         return {
             # §5 fields
             "traj_id": traj_id,
-            "integrator_type": "overdamped_langevin",
+            "integrator_type": integrator_label,
             "noise_seed": seed,
             "friction": self.gamma,
             "target_temperature": self.kBT,
@@ -261,7 +270,7 @@ class NumpySimulator:
             "platform": platform.platform(),
             # §5.1 data provenance
             "generation_timestamp": datetime.now(timezone.utc).isoformat(),
-            "generating_script_git_commit": self._get_git_commit(),
+            "generating_script_git_commit": self.git_commit,
             # Checksum added after file is written
         }
 
@@ -301,6 +310,16 @@ class NumpySimulator:
         # === Initialize chain (§8.1: "Initialize polymer coordinates") ===
         positions = self.initialize_chain(rng)
 
+        # === Initialize velocities for underdamped Langevin dynamics ===
+        if self.integrator_type == "underdamped":
+            # Maxwell-Boltzmann distribution: v_i ~ N(0, kBT / mass)
+            std_v = np.sqrt(self.kBT / self.mass)
+            velocities = rng.normal(0.0, std_v, size=positions.shape)
+            # Remove net center-of-mass linear momentum
+            velocities -= np.mean(velocities, axis=0)
+        else:
+            velocities = None
+
         # === [NEIGHBOR LIST] Build initial Verlet neighbor list ===
         neighbor_pairs = build_verlet_neighbor_list(
             positions, sigma=self.sigma, skin=self.neighbor_skin
@@ -319,7 +338,8 @@ class NumpySimulator:
 
         if verbose:
             print(f"[Traj {traj_id}] Starting simulation: N={self.N}, "
-                  f"T_steps={self.T_steps}, dt={self.dt}, seed={seed}")
+                  f"T_steps={self.T_steps}, dt={self.dt}, seed={seed}, "
+                  f"integrator={self.integrator_type}")
 
         # === Main simulation loop (§8.1) ===
         for t in range(1, self.T_steps + 1):
@@ -348,12 +368,18 @@ class NumpySimulator:
                 neighbor_pairs=neighbor_pairs,  # [NEIGHBOR LIST]
             )
 
-            # Overdamped dynamics update (§8.1)
-            new_positions, noise = euler_maruyama_overdamped_step(
-                positions, forces, self.dt, self.gamma, self.kBT, rng
-            )
-
-            positions = new_positions
+            # Integration step: underdamped or overdamped (§8.1)
+            if self.integrator_type == "underdamped":
+                new_positions, new_velocities, noise = euler_maruyama_underdamped_step(
+                    positions, velocities, forces, self.dt, self.gamma, self.kBT, self.mass, rng
+                )
+                positions = new_positions
+                velocities = new_velocities
+            else:
+                new_positions, noise = euler_maruyama_overdamped_step(
+                    positions, forces, self.dt, self.gamma, self.kBT, rng
+                )
+                positions = new_positions
 
             # §8.1: "if t > n_burnin and t mod save_every == 0: save(...)"
             if t > self.n_burnin and t % self.save_every == 0:
@@ -372,15 +398,21 @@ class NumpySimulator:
                     # Observables
                     **observables,
                 }
+                if velocities is not None:
+                    frame["velocities"] = velocities.copy().tolist()
+                    ke = 0.5 * self.mass * float(np.sum(velocities**2))
+                    frame["kinetic_energy"] = ke
+                    frame["instantaneous_temperature"] = (2.0 / (3.0 * self.N)) * ke
+
                 frames.append(frame)
 
             # Progress reporting
             if verbose and t % (self.T_steps // 10) == 0:
                 obs = self.compute_observables(positions)
                 print(f"  Step {t}/{self.T_steps}: "
-                      f"R_g={obs['radius_of_gyration']:.4f}, "
-                      f"mean_bond={obs['mean_bond_length']:.4f}, "
-                      f"PE={pe_bond + pe_nonbond:.4f}")
+                  f"R_g={obs['radius_of_gyration']:.4f}, "
+                  f"mean_bond={obs['mean_bond_length']:.4f}, "
+                  f"PE={pe_bond + pe_nonbond:.4f}")
 
         # === Build trajectory output ===
         trajectory = {
@@ -407,8 +439,8 @@ class NumpySimulator:
         """
         Save trajectory to disk and compute SHA256 checksum (§5.1).
 
-        Checksum is stored in a sidecar file (.sha256) to avoid the
-        circular dependency of embedding a hash inside the file it hashes.
+        Optimized single-pass write with in-memory SHA-256 calculation.
+        Checksum is also stored in a sidecar file (.sha256).
 
         Parameters
         ----------
@@ -416,7 +448,7 @@ class NumpySimulator:
             Trajectory data.
         output_dir : str
             Output directory.
-            
+
         Returns
         -------
         filepath : str
@@ -426,22 +458,19 @@ class NumpySimulator:
         traj_id = trajectory["metadata"]["traj_id"]
         filepath = os.path.join(output_dir, f"trajectory_{traj_id:04d}.json")
 
-        # Single write — final file contents
-        with open(filepath, "w") as f:
+        # In-memory checksum computation (single pass, zero redundant disk reads)
+        raw_json = json.dumps(trajectory)
+        checksum = hashlib.sha256(raw_json.encode("utf-8")).hexdigest()
+        trajectory["metadata"]["sha256_checksum"] = checksum
+
+        # Single write to disk
+        with open(filepath, "w", encoding="utf-8") as f:
             json.dump(trajectory, f)
 
-        # §5.1: checksum of the final file, stored in sidecar
-        sha256 = hashlib.sha256()
-        with open(filepath, "rb") as f:
-            for chunk in iter(lambda: f.read(8192), b""):
-                sha256.update(chunk)
-        checksum = sha256.hexdigest()
-
+        # Write sidecar file
         sidecar_path = filepath + ".sha256"
-        with open(sidecar_path, "w") as f:
+        with open(sidecar_path, "w", encoding="utf-8") as f:
             f.write(checksum)
-
-        trajectory["metadata"]["sha256_checksum"] = checksum
 
         return filepath
 
