@@ -147,8 +147,8 @@ def _advance_one_step_safe(
     nb_mask: torch.Tensor,
     gen: torch.Generator,
 ):
-    """Advance one overdamped step; adaptive micro-substep if disp > 0.15*sigma or FENE >= R0."""
-    max_disp_sq_limit = (0.15 * sigma) ** 2
+    """Advance one overdamped step; adaptive micro-substep if disp > 0.06*sigma or FENE >= R0."""
+    max_disp_sq_limit = (0.06 * sigma) ** 2
     r0_sq_limit = (R0_fene ** 2) * (1.0 - 1e-6)
 
     def _step_bad(cur_pos: torch.Tensor, next_pos: torch.Tensor) -> bool:
