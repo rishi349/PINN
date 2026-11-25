@@ -607,17 +607,4 @@ def compute_all_forces(
     )
 
     total_forces = f_bond + f_nonbond
-
-    # Safety: cap maximum per-bead force magnitude to prevent rare
-    # catastrophic single-step launches from close WCA encounters.
-    # A cap of 1000 ε/σ corresponds to a max displacement of
-    # (dt/γ) * F_max = 0.001 * 1000 = 1.0σ per step, which is large
-    # but recoverable. Without this, forces can reach 10^14+.
-    F_MAX = 1000.0  # ε/σ
-    force_magnitudes = np.linalg.norm(total_forces, axis=1, keepdims=True)
-    clipping_mask = force_magnitudes > F_MAX
-    if np.any(clipping_mask):
-        scale = np.where(clipping_mask, F_MAX / force_magnitudes, 1.0)
-        total_forces = total_forces * scale
-
     return total_forces, pe_bond, pe_nonbond

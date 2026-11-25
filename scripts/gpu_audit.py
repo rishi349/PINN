@@ -147,21 +147,29 @@ def _advance_one_step_safe(
     nb_mask: torch.Tensor,
     gen: torch.Generator,
 ):
-    """Advance one overdamped step; micro-substep from `pos` if a FENE bond would cross R0."""
+    """Advance one overdamped step; adaptive micro-substep if disp > 0.15*sigma or FENE >= R0."""
+    max_disp_sq_limit = (0.15 * sigma) ** 2
+    r0_sq_limit = (R0_fene ** 2) * (1.0 - 1e-6)
+
+    def _step_bad(cur_pos: torch.Tensor, next_pos: torch.Tensor) -> bool:
+        disp_sq = torch.max(torch.sum((next_pos - cur_pos) ** 2, dim=-1))
+        if disp_sq > max_disp_sq_limit:
+            return True
+        if bond_type == "fene":
+            max_bond_sq = torch.max(torch.sum((next_pos[:, 1:, :] - next_pos[:, :-1, :]) ** 2, dim=-1))
+            if max_bond_sq >= r0_sq_limit:
+                return True
+        return False
+
     f = compute_forces_torch(
         pos, bond_type, k_bond, r0, k_fene, R0_fene, epsilon, sigma, nb_mask
     )
     pos_next, noise = step_overdamped_torch(pos, f, dt, gamma, kBT, gen)
-    if bond_type != "fene":
+    if not _step_bad(pos, pos_next):
         return pos_next, noise, 0
 
-    r0_sq_limit = (R0_fene ** 2) * (1.0 - 1e-6)
-    max_bond_sq = torch.max(torch.sum((pos_next[:, 1:, :] - pos_next[:, :-1, :]) ** 2, dim=-1))
-    if max_bond_sq < r0_sq_limit:
-        return pos_next, noise, 0
-
-    # Rare overshoot: retry from original `pos` with finer substeps (10x, then 100x)
-    for n_sub in (10, 100):
+    # Rare large-force / overshoot step: retry from `pos` with finer substeps (no caps!)
+    for n_sub in (10, 100, 1000):
         dt_sub = dt / n_sub
         cur = pos
         noise_sum = torch.zeros_like(pos)
@@ -170,18 +178,18 @@ def _advance_one_step_safe(
             f_sub = compute_forces_torch(
                 cur, bond_type, k_bond, r0, k_fene, R0_fene, epsilon, sigma, nb_mask
             )
-            cur, n_sub_step = step_overdamped_torch(cur, f_sub, dt_sub, gamma, kBT, gen)
-            noise_sum = noise_sum + n_sub_step
-            sub_max_sq = torch.max(torch.sum((cur[:, 1:, :] - cur[:, :-1, :]) ** 2, dim=-1))
-            if sub_max_sq >= r0_sq_limit:
+            cur_next, n_sub_step = step_overdamped_torch(cur, f_sub, dt_sub, gamma, kBT, gen)
+            if _step_bad(cur, cur_next):
                 ok = False
                 break
+            cur = cur_next
+            noise_sum = noise_sum + n_sub_step
         if ok:
             return cur, noise_sum, 1
 
-    max_d = float(torch.sqrt(max_bond_sq).item())
+    max_d = float(torch.sqrt(torch.max(torch.sum((pos_next[:, 1:, :] - pos_next[:, :-1, :]) ** 2, dim=-1))).item())
     raise ValueError(
-        f"FENE bond exceeded R0={R0_fene} even after 100x micro-substepping (max |r_ij|={max_d:.5f}). Reduce dt."
+        f"Step unstable even after 1000x adaptive micro-substepping (initial max |r_ij|={max_d:.5f}). Reduce dt."
     )
 
 
