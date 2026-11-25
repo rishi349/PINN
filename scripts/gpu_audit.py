@@ -84,12 +84,11 @@ def compute_forces_torch(
         f_mag = k_fene * dist / denom
         f_bond = torch.where(nonzero, f_mag * r_hat, f_bond)
 
-        # Kremer-Grest WCA repulsion on bonded pairs
+        # Kremer-Grest WCA repulsion on bonded pairs (unclamped)
         wca_b_mask = (dist < r_cut) & nonzero
-        dist_b_wca = torch.clamp(dist, min=0.4 * sigma)
-        sr6_b = (sigma / dist_b_wca) ** 6
+        sr6_b = (sigma / safe_dist) ** 6
         sr12_b = sr6_b ** 2
-        f_wca_b = (24.0 * epsilon / dist_b_wca) * (2.0 * sr12_b - sr6_b)
+        f_wca_b = (24.0 * epsilon / safe_dist) * (2.0 * sr12_b - sr6_b)
         f_bond = f_bond - torch.where(wca_b_mask, f_wca_b * r_hat, torch.zeros_like(r_hat))
     else:
         raise ValueError(f"Unknown bond_type: {bond_type}")
@@ -97,21 +96,17 @@ def compute_forces_torch(
     forces[:, :-1, :] += f_bond
     forces[:, 1:, :] -= f_bond
 
-    # --- 2. Non-bonded WCA forces: all pairs |i - j| >= 2 ---
-    # diff[b, i, j, :] = pos[b, j, :] - pos[b, i, :]
+    # --- 2. Non-bonded WCA forces: all pairs |i - j| >= 2 (unclamped) ---
     diff = pos.unsqueeze(1) - pos.unsqueeze(2)  # (B, N, N, 3) -> pos_i - pos_j
-    # Wait: let r_ij_mat = pos_j - pos_i so force on i is -f_factor * r_hat (away from j)
-    # Equivalently, pos_i - pos_j points AWAY from j, so force on i = +f_factor * (pos_i - pos_j)/d
     d_mat = torch.linalg.norm(diff, dim=-1)  # (B, N, N)
     if nonbonded_mask is None:
         idx = torch.arange(N, device=device)
         nonbonded_mask = (torch.abs(idx.unsqueeze(0) - idx.unsqueeze(1)) >= 2)
 
     active = nonbonded_mask.unsqueeze(0) & (d_mat < r_cut) & (d_mat > 1e-12)
-    d_safe = torch.clamp(d_mat, min=0.4 * sigma)
+    d_safe = torch.where(d_mat > 1e-12, d_mat, torch.ones_like(d_mat))
     sr6 = (sigma / d_safe) ** 6
     sr12 = sr6 ** 2
-    # Force magnitude / d_safe = 24*eps / d_safe^2 * (2*sr12 - sr6)
     f_over_d = torch.where(
         active,
         (24.0 * epsilon / (d_safe ** 2)) * (2.0 * sr12 - sr6),
@@ -119,11 +114,6 @@ def compute_forces_torch(
     )
     f_nonbond = torch.sum(f_over_d.unsqueeze(-1) * diff, dim=2)  # (B, N, 3)
     forces = forces + f_nonbond
-
-    # --- 3. Force magnitude cap (F_MAX = 1000) ---
-    f_norm = torch.linalg.norm(forces, dim=-1, keepdim=True)
-    f_scale = torch.where(f_norm > 1000.0, 1000.0 / torch.clamp(f_norm, min=1e-12), torch.ones_like(f_norm))
-    forces = forces * f_scale
     return forces
 
 
@@ -135,13 +125,11 @@ def step_overdamped_torch(
     kBT: float,
     generator: torch.Generator,
 ):
-    """Batched Euler-Maruyama overdamped step with MAX_DISP = 0.5*sigma cap."""
+    """Batched Euler-Maruyama overdamped step (uncapped)."""
     noise_amp = (2.0 * kBT * dt / gamma) ** 0.5
     noise = noise_amp * torch.randn(pos.shape, device=pos.device, dtype=pos.dtype, generator=generator)
     disp = (dt / gamma) * forces + noise
-    disp_mag = torch.linalg.norm(disp, dim=-1, keepdim=True)
-    scale = torch.where(disp_mag > 0.5, 0.5 / torch.clamp(disp_mag, min=1e-30), torch.ones_like(disp_mag))
-    return pos + disp * scale, noise
+    return pos + disp, noise
 
 
 def _advance_one_step_safe(
