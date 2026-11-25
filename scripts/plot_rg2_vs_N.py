@@ -52,7 +52,7 @@ ROUSE_PREFACTOR_PROD   = 2   # multiples of τ_R for production
 SAVE_EVERY = 100
 
 
-def rg2_for_chain(N, config_template, seed, verbose):
+def rg2_for_chain(N, config_template, seed, verbose, max_steps_per_N=None):
     """
     Run an equilibrium simulation for a chain of length N and return
     (mean_Rg2, sem_Rg2) averaged over production frames.
@@ -60,40 +60,22 @@ def rg2_for_chain(N, config_template, seed, verbose):
     import copy
     cfg = copy.deepcopy(config_template)
 
+    dt = float(cfg["integrator"]["dt"])
     cfg["chain"]["N"] = N
     tau_R = N * N
-    n_burnin = max(int(ROUSE_PREFACTOR_BURNIN * tau_R / DT), 2000)
-    n_prod   = max(int(ROUSE_PREFACTOR_PROD   * tau_R / DT), 1000)
+    n_burnin = max(int(ROUSE_PREFACTOR_BURNIN * tau_R / dt), 2000)
+    n_prod   = max(int(ROUSE_PREFACTOR_PROD   * tau_R / dt), 1000)
+    if max_steps_per_N is not None:
+        n_burnin = min(n_burnin, int(max_steps_per_N * 0.6))
+        n_prod   = min(n_prod,   max(int(max_steps_per_N * 0.4), 500))
     cfg["simulation"]["T_steps"]    = n_burnin + n_prod
     cfg["simulation"]["n_burnin"]   = n_burnin
     cfg["simulation"]["save_every"] = SAVE_EVERY
-    cfg["integrator"]["dt"]         = DT
     cfg["box"]["L"] = max(10 * N, 100.0)
 
     sim = NumpySimulator(cfg)
-    rng = np.random.default_rng(seed)
-    pos = sim.initialize_chain(rng)
-
-    Rg2_samples = []
-
-    for t in range(1, sim.T_steps + 1):
-        forces, _, _ = compute_all_forces(
-            pos,
-            bond_type=sim.bond_type,
-            k_bond=sim.k_bond,
-            r0=sim.r0,
-            k_fene=sim.k_fene,
-            R0_fene=sim.R0_fene,
-            epsilon=sim.epsilon,
-            sigma=sim.sigma,
-        )
-        pos, _ = euler_maruyama_overdamped_step(pos, forces, DT, sim.gamma, sim.kBT, rng)
-
-        if t > sim.n_burnin and t % sim.save_every == 0:
-            obs = sim.compute_observables(pos)
-            Rg2_samples.append(obs["Rg_squared"])
-
-    Rg2 = np.array(Rg2_samples)
+    traj = sim.run(traj_id=N, seed=seed, verbose=False)
+    Rg2 = np.array([f["Rg_squared"] for f in traj["frames"]])
     if len(Rg2) == 0:
         return float("nan"), float("nan")
 
@@ -156,10 +138,11 @@ def main():
     mean_Rg2_list = []
     sem_Rg2_list  = []
 
+    dt = float(config["integrator"]["dt"])
     for N in N_values:
         tau_R = N * N
-        n_burnin_steps = max(int(ROUSE_PREFACTOR_BURNIN * tau_R / DT), 2000)
-        n_prod_steps   = max(int(ROUSE_PREFACTOR_PROD   * tau_R / DT), 1000)
+        n_burnin_steps = max(int(ROUSE_PREFACTOR_BURNIN * tau_R / dt), 2000)
+        n_prod_steps   = max(int(ROUSE_PREFACTOR_PROD   * tau_R / dt), 1000)
         # Hard cap for quick runs
         if args.max_steps_per_N is not None:
             cap = args.max_steps_per_N
@@ -170,7 +153,8 @@ def main():
               f"prod={n_prod_steps} steps  expected frames~{n_frames}")
 
         mean_Rg2, sem_Rg2 = rg2_for_chain(
-            N, config, seed=args.seed + N, verbose=verbose
+            N, config, seed=args.seed + N, verbose=verbose,
+            max_steps_per_N=args.max_steps_per_N,
         )
         if np.isnan(mean_Rg2):
             print(f"  WARNING: N={N} produced no frames — increase steps or lower N.")
