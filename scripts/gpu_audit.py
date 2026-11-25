@@ -304,22 +304,30 @@ def main():
     parser.add_argument("--config", type=str, default="configs/default.yaml")
     parser.add_argument("--output-dir", type=str, default="plots/gpu_audit")
     parser.add_argument("--quick", action="store_true", help="Fast ~2 min verification mode")
+    parser.add_argument(
+        "--dt", type=float, default=None,
+        help="Override integrator dt for the GPU kernel (default: read from config). "
+             "Use 0.0001 for float32 GPU batched runs to avoid FENE overextension.",
+    )
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
     cfg = load_config(os.path.join(project_root, args.config))
+
+    # Allow per-run dt override without touching default.yaml
+    dt_gpu = args.dt if args.dt is not None else float(cfg["integrator"]["dt"])
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("=" * 65)
     print(f"  PyTorch GPU Physics Audit | Device: {device}")
     if device.type == "cuda":
         print(f"  GPU: {torch.cuda.get_device_name(0)}")
-    print(f"  Bond: {cfg['bond']['type']} | dt: {cfg['integrator']['dt']}")
+    print(f"  Bond: {cfg['bond']['type']} | config dt: {cfg['integrator']['dt']} | GPU kernel dt: {dt_gpu}")
     print(f"  Mode: {'QUICK' if args.quick else 'FULL'}")
     print("=" * 65)
 
     t0_total = time.time()
-    dt = float(cfg["integrator"]["dt"])
+    dt = dt_gpu  # GPU kernel uses this dt throughout
     bond_type = cfg["bond"]["type"]
     k_bond = float(cfg["bond"]["k_bond"])
     r0 = float(cfg["bond"]["r0"])
@@ -339,9 +347,11 @@ def main():
     # 2. Primary N=120 Bond & FDT + MSD
     print("\n[2/5] Running batched N=120 simulation on GPU (Bond, FDT, MSD)...")
     if args.quick:
-        B_120, burn_120, prod_120, save_120 = 4, 20000, 20000, 100
+        # With dt=0.0001, 40000 burn-in steps = 4τ (same physical time as 20000 at dt=0.0002)
+        B_120, burn_120, prod_120, save_120 = 4, 40000, 40000, 100
     else:
-        B_120, burn_120, prod_120, save_120 = 8, 150000, 150000, 250
+        # Full: 300000 steps * dt=0.0001 = 30τ (well past τ_R for N=120 ≈ 14τ)
+        B_120, burn_120, prod_120, save_120 = 8, 300000, 300000, 250
 
     traj_120, fdt_ratio = run_batched_sim(
         B_120, 120, burn_120, prod_120, save_120, dt,
