@@ -144,6 +144,59 @@ def step_overdamped_torch(
     return pos + disp * scale, noise
 
 
+def _advance_one_step_safe(
+    pos: torch.Tensor,
+    dt: float,
+    bond_type: str,
+    k_bond: float,
+    r0: float,
+    k_fene: float,
+    R0_fene: float,
+    epsilon: float,
+    sigma: float,
+    gamma: float,
+    kBT: float,
+    nb_mask: torch.Tensor,
+    gen: torch.Generator,
+):
+    """Advance one overdamped step; micro-substep from `pos` if a FENE bond would cross R0."""
+    f = compute_forces_torch(
+        pos, bond_type, k_bond, r0, k_fene, R0_fene, epsilon, sigma, nb_mask
+    )
+    pos_next, noise = step_overdamped_torch(pos, f, dt, gamma, kBT, gen)
+    if bond_type != "fene":
+        return pos_next, noise, 0
+
+    r0_sq_limit = (R0_fene ** 2) * (1.0 - 1e-6)
+    max_bond_sq = torch.max(torch.sum((pos_next[:, 1:, :] - pos_next[:, :-1, :]) ** 2, dim=-1))
+    if max_bond_sq < r0_sq_limit:
+        return pos_next, noise, 0
+
+    # Rare overshoot: retry from original `pos` with finer substeps (10x, then 100x)
+    for n_sub in (10, 100):
+        dt_sub = dt / n_sub
+        cur = pos
+        noise_sum = torch.zeros_like(pos)
+        ok = True
+        for _ in range(n_sub):
+            f_sub = compute_forces_torch(
+                cur, bond_type, k_bond, r0, k_fene, R0_fene, epsilon, sigma, nb_mask
+            )
+            cur, n_sub_step = step_overdamped_torch(cur, f_sub, dt_sub, gamma, kBT, gen)
+            noise_sum = noise_sum + n_sub_step
+            sub_max_sq = torch.max(torch.sum((cur[:, 1:, :] - cur[:, :-1, :]) ** 2, dim=-1))
+            if sub_max_sq >= r0_sq_limit:
+                ok = False
+                break
+        if ok:
+            return cur, noise_sum, 1
+
+    max_d = float(torch.sqrt(max_bond_sq).item())
+    raise ValueError(
+        f"FENE bond exceeded R0={R0_fene} even after 100x micro-substepping (max |r_ij|={max_d:.5f}). Reduce dt."
+    )
+
+
 @torch.no_grad()
 def run_batched_sim(
     B: int,
@@ -184,26 +237,31 @@ def run_batched_sim(
     idx = torch.arange(N, device=device)
     nb_mask = (torch.abs(idx.unsqueeze(0) - idx.unsqueeze(1)) >= 2)
 
+    substep_events = 0
+
     # Burn-in
     for _ in range(n_burnin):
-        f = compute_forces_torch(
-            pos, bond_type, k_bond, r0, k_fene, R0_fene, epsilon, sigma, nb_mask
+        pos, _, used_sub = _advance_one_step_safe(
+            pos, dt, bond_type, k_bond, r0, k_fene, R0_fene, epsilon, sigma, gamma, kBT, nb_mask, gen
         )
-        pos, _ = step_overdamped_torch(pos, f, dt, gamma, kBT, gen)
+        substep_events += used_sub
 
     # Production
     frames = []
     fdt_ratios = []
     for step in range(1, n_prod + 1):
-        f = compute_forces_torch(
-            pos, bond_type, k_bond, r0, k_fene, R0_fene, epsilon, sigma, nb_mask
+        pos_next, noise, used_sub = _advance_one_step_safe(
+            pos, dt, bond_type, k_bond, r0, k_fene, R0_fene, epsilon, sigma, gamma, kBT, nb_mask, gen
         )
-        pos_next, noise = step_overdamped_torch(pos, f, dt, gamma, kBT, gen)
+        substep_events += used_sub
         if step % save_every == 0:
             frames.append(pos_next.detach().cpu().numpy())
             # FDT check on raw stochastic displacement: var(noise) == 2*kBT*dt/gamma
             fdt_ratios.append(float(torch.mean(noise ** 2).item() / (2.0 * kBT * dt / gamma)))
         pos = pos_next
+
+    if bond_type == "fene":
+        print(f"  [N={N}] micro-substep events: {substep_events} / {n_burnin + n_prod} steps")
 
     return np.stack(frames, axis=0), float(np.mean(fdt_ratios))
 
