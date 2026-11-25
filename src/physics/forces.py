@@ -236,7 +236,11 @@ def wca_force(r_ij: np.ndarray, epsilon: float, sigma: float) -> np.ndarray:
     if dist >= r_cut or dist < 1e-12:
         return np.zeros_like(r_ij)
 
-    # Unclamped WCA force (dist > 1e-12)
+    # Clamp minimum distance to prevent force divergence (WCA ~ r^-13).
+    # At dist = 0.1σ the raw force is ~5e14, which is non-physical.
+    # Clamping to 0.4σ caps the force at ~2400 ε/σ, still strongly repulsive
+    # but within the regime where Euler-Maruyama remains stable at dt=0.001.
+    dist = max(dist, 0.4 * sigma)
 
     # WCA force derivation:
     # U_LJ = 4ε[(σ/r)¹² - (σ/r)⁶]
@@ -294,6 +298,9 @@ def wca_potential(r_ij: np.ndarray, epsilon: float, sigma: float) -> float:
 
     if dist >= r_cut or dist < 1e-12:
         return 0.0
+
+    # Clamp minimum distance to be consistent with the force clamping
+    dist = max(dist, 0.4 * sigma)
 
     sr6 = (sigma / dist) ** 6
     sr12 = sr6 ** 2
@@ -382,7 +389,7 @@ def compute_bonded_forces(
         r_cut = sigma * 2.0 ** (1.0 / 6.0)
         wca_mask = (dist < r_cut) & nonzero
         if np.any(wca_mask):
-            dist_wca = dist[wca_mask]
+            dist_wca = np.clip(dist[wca_mask], 0.4 * sigma, None)
             sr6 = (sigma / dist_wca) ** 6
             sr12 = sr6 ** 2
             f_wca_mag = 24.0 * epsilon / dist_wca * (2.0 * sr12 - sr6)
@@ -521,6 +528,10 @@ def compute_nonbonded_forces(
 
     mask = (dist < r_cut) & (dist > 1e-12)
 
+    # Clamp minimum distance to prevent WCA force divergence (consistent
+    # with pairwise wca_force). This caps the maximum repulsive force
+    # at ~2400 ε/σ instead of allowing it to reach 10^14+ at close approach.
+    dist = np.clip(dist, 0.4 * sigma, None)
     if not np.any(mask):
         return forces, pe
         
@@ -596,4 +607,17 @@ def compute_all_forces(
     )
 
     total_forces = f_bond + f_nonbond
+
+    # Safety: cap maximum per-bead force magnitude to prevent rare
+    # catastrophic single-step launches from close WCA encounters.
+    # A cap of 1000 ε/σ corresponds to a max displacement of
+    # (dt/γ) * F_max = 0.001 * 1000 = 1.0σ per step, which is large
+    # but recoverable. Without this, forces can reach 10^14+.
+    F_MAX = 1000.0  # ε/σ
+    force_magnitudes = np.linalg.norm(total_forces, axis=1, keepdims=True)
+    clipping_mask = force_magnitudes > F_MAX
+    if np.any(clipping_mask):
+        scale = np.where(clipping_mask, F_MAX / force_magnitudes, 1.0)
+        total_forces = total_forces * scale
+
     return total_forces, pe_bond, pe_nonbond

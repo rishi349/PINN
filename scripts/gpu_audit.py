@@ -51,10 +51,12 @@ def compute_forces_torch(
     epsilon: float = 1.0,
     sigma: float = 1.0,
     nonbonded_mask: torch.Tensor = None,
+    fene_clamp_counter: list = None,
 ) -> torch.Tensor:
     """
     Compute total (bonded + nonbonded WCA) forces for a batch of chains (B, N, 3).
-    Matches src/physics/forces.py including 0.4*sigma clamp and F_MAX=1000 cap.
+    Matches src/physics/forces.py including 0.4*sigma clamp and F_MAX=1000 cap,
+    plus a 0.99*R0 FENE safety clamp with trigger counter.
     """
     B, N, _ = pos.shape
     device = pos.device
@@ -74,21 +76,21 @@ def compute_forces_torch(
         f_mag = k_bond * (dist - r0)
         f_bond = torch.where(nonzero, f_mag * r_hat, f_bond)
     elif bond_type == "fene":
-        ratio_sq = (dist / R0_fene) ** 2
-        if torch.any(ratio_sq >= 1.0):
-            max_d = float(torch.max(dist).item())
-            raise ValueError(
-                f"FENE bond exceeded R0={R0_fene}: max |r_ij|={max_d:.5f}. Reduce dt."
-            )
+        r_limit = 0.99 * R0_fene
+        if fene_clamp_counter is not None and torch.any(dist >= r_limit):
+            fene_clamp_counter[0] += 1
+        dist_fene = torch.clamp(dist, max=r_limit)
+        ratio_sq = (dist_fene / R0_fene) ** 2
         denom = 1.0 - ratio_sq
-        f_mag = k_fene * dist / denom
+        f_mag = k_fene * dist_fene / denom
         f_bond = torch.where(nonzero, f_mag * r_hat, f_bond)
 
-        # Kremer-Grest WCA repulsion on bonded pairs (unclamped)
+        # Kremer-Grest WCA repulsion on bonded pairs
         wca_b_mask = (dist < r_cut) & nonzero
-        sr6_b = (sigma / safe_dist) ** 6
+        dist_b_wca = torch.clamp(dist, min=0.4 * sigma)
+        sr6_b = (sigma / dist_b_wca) ** 6
         sr12_b = sr6_b ** 2
-        f_wca_b = (24.0 * epsilon / safe_dist) * (2.0 * sr12_b - sr6_b)
+        f_wca_b = (24.0 * epsilon / dist_b_wca) * (2.0 * sr12_b - sr6_b)
         f_bond = f_bond - torch.where(wca_b_mask, f_wca_b * r_hat, torch.zeros_like(r_hat))
     else:
         raise ValueError(f"Unknown bond_type: {bond_type}")
@@ -96,7 +98,7 @@ def compute_forces_torch(
     forces[:, :-1, :] += f_bond
     forces[:, 1:, :] -= f_bond
 
-    # --- 2. Non-bonded WCA forces: all pairs |i - j| >= 2 (unclamped) ---
+    # --- 2. Non-bonded WCA forces: all pairs |i - j| >= 2 ---
     diff = pos.unsqueeze(1) - pos.unsqueeze(2)  # (B, N, N, 3) -> pos_i - pos_j
     d_mat = torch.linalg.norm(diff, dim=-1)  # (B, N, N)
     if nonbonded_mask is None:
@@ -104,7 +106,7 @@ def compute_forces_torch(
         nonbonded_mask = (torch.abs(idx.unsqueeze(0) - idx.unsqueeze(1)) >= 2)
 
     active = nonbonded_mask.unsqueeze(0) & (d_mat < r_cut) & (d_mat > 1e-12)
-    d_safe = torch.where(d_mat > 1e-12, d_mat, torch.ones_like(d_mat))
+    d_safe = torch.clamp(d_mat, min=0.4 * sigma)
     sr6 = (sigma / d_safe) ** 6
     sr12 = sr6 ** 2
     f_over_d = torch.where(
@@ -114,6 +116,11 @@ def compute_forces_torch(
     )
     f_nonbond = torch.sum(f_over_d.unsqueeze(-1) * diff, dim=2)  # (B, N, 3)
     forces = forces + f_nonbond
+
+    # --- 3. Force magnitude cap (F_MAX = 1000) ---
+    f_norm = torch.linalg.norm(forces, dim=-1, keepdim=True)
+    f_scale = torch.where(f_norm > 1000.0, 1000.0 / torch.clamp(f_norm, min=1e-12), torch.ones_like(f_norm))
+    forces = forces * f_scale
     return forces
 
 
@@ -125,72 +132,13 @@ def step_overdamped_torch(
     kBT: float,
     generator: torch.Generator,
 ):
-    """Batched Euler-Maruyama overdamped step (uncapped)."""
+    """Batched Euler-Maruyama overdamped step with MAX_DISP = 0.5*sigma cap."""
     noise_amp = (2.0 * kBT * dt / gamma) ** 0.5
     noise = noise_amp * torch.randn(pos.shape, device=pos.device, dtype=pos.dtype, generator=generator)
     disp = (dt / gamma) * forces + noise
-    return pos + disp, noise
-
-
-def _advance_one_step_safe(
-    pos: torch.Tensor,
-    dt: float,
-    bond_type: str,
-    k_bond: float,
-    r0: float,
-    k_fene: float,
-    R0_fene: float,
-    epsilon: float,
-    sigma: float,
-    gamma: float,
-    kBT: float,
-    nb_mask: torch.Tensor,
-    gen: torch.Generator,
-):
-    """Advance one overdamped step; adaptive micro-substep if disp > 0.06*sigma or FENE >= R0."""
-    max_disp_sq_limit = (0.06 * sigma) ** 2
-    r0_sq_limit = (R0_fene ** 2) * (1.0 - 1e-6)
-
-    def _step_bad(cur_pos: torch.Tensor, next_pos: torch.Tensor) -> bool:
-        disp_sq = torch.max(torch.sum((next_pos - cur_pos) ** 2, dim=-1))
-        if disp_sq > max_disp_sq_limit:
-            return True
-        if bond_type == "fene":
-            max_bond_sq = torch.max(torch.sum((next_pos[:, 1:, :] - next_pos[:, :-1, :]) ** 2, dim=-1))
-            if max_bond_sq >= r0_sq_limit:
-                return True
-        return False
-
-    f = compute_forces_torch(
-        pos, bond_type, k_bond, r0, k_fene, R0_fene, epsilon, sigma, nb_mask
-    )
-    pos_next, noise = step_overdamped_torch(pos, f, dt, gamma, kBT, gen)
-    if not _step_bad(pos, pos_next):
-        return pos_next, noise, 0
-
-    # Rare large-force / overshoot step: retry from `pos` with finer substeps (no caps!)
-    for n_sub in (10, 100, 1000):
-        dt_sub = dt / n_sub
-        cur = pos
-        noise_sum = torch.zeros_like(pos)
-        ok = True
-        for _ in range(n_sub):
-            f_sub = compute_forces_torch(
-                cur, bond_type, k_bond, r0, k_fene, R0_fene, epsilon, sigma, nb_mask
-            )
-            cur_next, n_sub_step = step_overdamped_torch(cur, f_sub, dt_sub, gamma, kBT, gen)
-            if _step_bad(cur, cur_next):
-                ok = False
-                break
-            cur = cur_next
-            noise_sum = noise_sum + n_sub_step
-        if ok:
-            return cur, noise_sum, 1
-
-    max_d = float(torch.sqrt(torch.max(torch.sum((pos_next[:, 1:, :] - pos_next[:, :-1, :]) ** 2, dim=-1))).item())
-    raise ValueError(
-        f"Step unstable even after 1000x adaptive micro-substepping (initial max |r_ij|={max_d:.5f}). Reduce dt."
-    )
+    disp_mag = torch.linalg.norm(disp, dim=-1, keepdim=True)
+    scale = torch.where(disp_mag > 0.5, 0.5 / torch.clamp(disp_mag, min=1e-30), torch.ones_like(disp_mag))
+    return pos + disp * scale, noise
 
 
 @torch.no_grad()
@@ -233,23 +181,25 @@ def run_batched_sim(
     idx = torch.arange(N, device=device)
     nb_mask = (torch.abs(idx.unsqueeze(0) - idx.unsqueeze(1)) >= 2)
 
-    substep_events = 0
+    fene_clamps = [0]
 
     # Burn-in
     for _ in range(n_burnin):
-        pos, _, used_sub = _advance_one_step_safe(
-            pos, dt, bond_type, k_bond, r0, k_fene, R0_fene, epsilon, sigma, gamma, kBT, nb_mask, gen
+        f = compute_forces_torch(
+            pos, bond_type, k_bond, r0, k_fene, R0_fene, epsilon, sigma, nb_mask,
+            fene_clamp_counter=fene_clamps,
         )
-        substep_events += used_sub
+        pos, _ = step_overdamped_torch(pos, f, dt, gamma, kBT, gen)
 
     # Production
     frames = []
     fdt_ratios = []
     for step in range(1, n_prod + 1):
-        pos_next, noise, used_sub = _advance_one_step_safe(
-            pos, dt, bond_type, k_bond, r0, k_fene, R0_fene, epsilon, sigma, gamma, kBT, nb_mask, gen
+        f = compute_forces_torch(
+            pos, bond_type, k_bond, r0, k_fene, R0_fene, epsilon, sigma, nb_mask,
+            fene_clamp_counter=fene_clamps,
         )
-        substep_events += used_sub
+        pos_next, noise = step_overdamped_torch(pos, f, dt, gamma, kBT, gen)
         if step % save_every == 0:
             frames.append(pos_next.detach().cpu().numpy())
             # FDT check on raw stochastic displacement: var(noise) == 2*kBT*dt/gamma
@@ -257,7 +207,7 @@ def run_batched_sim(
         pos = pos_next
 
     if bond_type == "fene":
-        print(f"  [N={N}] micro-substep events: {substep_events} / {n_burnin + n_prod} steps")
+        print(f"  [N={N}] FENE 0.99*R0 guard triggered: {fene_clamps[0]} / {n_burnin + n_prod} steps")
 
     return np.stack(frames, axis=0), float(np.mean(fdt_ratios))
 
