@@ -318,16 +318,15 @@ def compute_bonded_forces(
     r0: float = 1.0,
     k_fene: float = 30.0,
     R0_fene: float = 1.5,
+    epsilon: float = 1.0,
+    sigma: float = 1.0,
 ) -> Tuple[np.ndarray, float]:
     """
     Compute bonded forces for a linear polymer chain.
 
-    From §8.1 pseudocode:
-        for i in 1..N-1:
-            r_ij = r[i+1] - r[i]
-            F_bond = bond_force(r_ij, k_bond, r0)
-            F[i] += F_bond
-            F[i+1] -= F_bond    # Newton's 3rd law
+    For bond_type="fene", uses the standard Kremer-Grest FENE + WCA bonded
+    potential (matching HOOMD-blue FENEWCA) so bonded neighbors experience both
+    attractive FENE confinement and short-range WCA repulsion (equilibrium ≈ 0.965σ).
 
     Parameters
     ----------
@@ -343,6 +342,10 @@ def compute_bonded_forces(
         FENE spring constant (used if bond_type="fene").
     R0_fene : float
         FENE max extension (used if bond_type="fene").
+    epsilon : float
+        WCA energy scale for FENE+WCA bonded repulsion (used if bond_type="fene").
+    sigma : float
+        WCA length scale for FENE+WCA bonded repulsion (used if bond_type="fene").
 
     Returns
     -------
@@ -353,18 +356,18 @@ def compute_bonded_forces(
     """
     N, dim = positions.shape
     forces = np.zeros_like(positions)
-    
+
     # Vectorized computation for all N-1 bonds
     r_ij = positions[1:] - positions[:-1]  # Vectors from i to i+1
     dist = np.linalg.norm(r_ij, axis=1)
-    
+
     nonzero = dist > 1e-12
     r_hat = np.zeros_like(r_ij)
     r_hat[nonzero] = r_ij[nonzero] / dist[nonzero, np.newaxis]
-    
+
     f_bond = np.zeros_like(r_ij)
     pe = 0.0
-    
+
     if bond_type == "harmonic":
         f_mag = k_bond * (dist - r0)
         f_bond[nonzero] = f_mag[nonzero, np.newaxis] * r_hat[nonzero]
@@ -381,6 +384,18 @@ def compute_bonded_forces(
         f_mag = k_fene * dist / denominator
         f_bond[nonzero] = f_mag[nonzero, np.newaxis] * r_hat[nonzero]
         pe = float(np.sum(-0.5 * k_fene * R0_fene**2 * np.log(denominator)))
+
+        # Kremer-Grest WCA repulsion on bonded pairs (r < 2^(1/6) * sigma)
+        r_cut = sigma * 2.0 ** (1.0 / 6.0)
+        wca_mask = (dist < r_cut) & nonzero
+        if np.any(wca_mask):
+            dist_wca = np.clip(dist[wca_mask], 0.4 * sigma, None)
+            sr6 = (sigma / dist_wca) ** 6
+            sr12 = sr6 ** 2
+            f_wca_mag = 24.0 * epsilon / dist_wca * (2.0 * sr12 - sr6)
+            # Repulsive: pushes bead i away from i+1 (-r_hat direction)
+            f_bond[wca_mask] -= f_wca_mag[:, np.newaxis] * r_hat[wca_mask]
+            pe += float(np.sum(4.0 * epsilon * (sr12 - sr6) + epsilon))
     else:
         raise ValueError(f"Unknown bond type: {bond_type}")
 
@@ -584,7 +599,7 @@ def compute_all_forces(
         Nonbonded (WCA) potential energy.
     """
     f_bond, pe_bond = compute_bonded_forces(
-        positions, bond_type, k_bond, r0, k_fene, R0_fene
+        positions, bond_type, k_bond, r0, k_fene, R0_fene, epsilon=epsilon, sigma=sigma
     )
     # [NEIGHBOR LIST] forward neighbor_pairs
     f_nonbond, pe_nonbond = compute_nonbonded_forces(

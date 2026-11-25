@@ -416,6 +416,23 @@ class TestAggregateForcesComputation:
         np.testing.assert_allclose(pe_bond, pe_b, atol=1e-12)
         np.testing.assert_allclose(pe_nonbond, pe_nb, atol=1e-12)
 
+    def test_fene_bonded_includes_wca_repulsion(self):
+        """compute_bonded_forces with bond_type='fene' includes WCA repulsion on bonds."""
+        # Two beads at r=0.961σ (near FENE+WCA equilibrium)
+        positions = np.array([[0.0, 0.0, 0.0], [0.961, 0.0, 0.0]])
+        forces, pe = compute_bonded_forces(
+            positions, "fene", k_fene=K_FENE, R0_fene=R0_FENE,
+            epsilon=EPSILON, sigma=SIGMA,
+        )
+        r_ij = positions[1] - positions[0]
+        expected_f0 = fene_bond_force(r_ij, K_FENE, R0_FENE) + wca_force(r_ij, EPSILON, SIGMA)
+        expected_pe = fene_bond_potential(r_ij, K_FENE, R0_FENE) + wca_potential(r_ij, EPSILON, SIGMA)
+        np.testing.assert_allclose(forces[0], expected_f0, atol=1e-10)
+        np.testing.assert_allclose(forces[1], -expected_f0, atol=1e-10)
+        np.testing.assert_allclose(pe, expected_pe, atol=1e-10)
+        # Net force magnitude near zero at equilibrium ≈0.965σ
+        assert np.linalg.norm(forces[0]) < 1.0
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -305,6 +305,31 @@ class TestNumpySimulatorIntegration:
             assert np.all(np.isfinite(pos)), "Positions must be finite"
             assert np.all(np.isfinite(vel)), "Velocities must be finite"
 
+    def test_fene_wca_simulator_runs(self):
+        """FENE+WCA (Kremer-Grest) simulator runs stably with mean bond ≈ 0.965σ."""
+        import yaml
+        config_path = os.path.join(
+            os.path.dirname(__file__), "..", "configs", "default.yaml"
+        )
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = yaml.safe_load(f)
+
+        config["chain"]["N"] = 10
+        config["bond"]["type"] = "fene"
+        config["simulation"]["T_steps"] = 1000
+        config["simulation"]["n_burnin"] = 500
+        config["simulation"]["save_every"] = 50
+
+        from src.simulator.numpy_simulator import NumpySimulator
+        sim = NumpySimulator(config)
+        trajectory = sim.run(traj_id=3, seed=42, verbose=False)
+
+        assert trajectory["metadata"]["bond_type"] == "fene"
+        assert trajectory["n_frames"] > 0
+        mean_bonds = [f["mean_bond_length"] for f in trajectory["frames"]]
+        avg_bl = float(np.mean(mean_bonds))
+        assert 0.90 < avg_bl < 1.05, f"FENE+WCA mean bond should be ≈0.965σ, got {avg_bl:.4f}"
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
