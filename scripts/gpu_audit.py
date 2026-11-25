@@ -99,7 +99,8 @@ def compute_forces_torch(
     forces[:, 1:, :] -= f_bond
 
     # --- 2. Non-bonded WCA forces: all pairs |i - j| >= 2 ---
-    diff = pos.unsqueeze(1) - pos.unsqueeze(2)  # (B, N, N, 3) -> pos_i - pos_j
+    # pos[:, i] - pos[:, j] points AWAY from j, so positive f_over_d repels i from j.
+    diff = pos.unsqueeze(2) - pos.unsqueeze(1)  # (B, N, N, 3) -> pos_i - pos_j
     d_mat = torch.linalg.norm(diff, dim=-1)  # (B, N, N)
     if nonbonded_mask is None:
         idx = torch.arange(N, device=device)
@@ -221,10 +222,11 @@ def check_force_parity(cfg, device):
     rng = np.random.default_rng(123)
     max_rel_err = 0.0
     for N in [30, 60, 120]:
-        # Place chain along x with small perturbation so bonds < R0
+        # Compact random-walk-like configuration so both FENE bonds (< R0) and non-bonded WCA (< r_cut) are active
         pos_np = np.zeros((N, 3), dtype=np.float64)
-        pos_np[:, 0] = np.arange(N) * 0.97
-        pos_np += rng.normal(0.0, 0.05, size=(N, 3))
+        pos_np[:, 0] = np.arange(N) * 0.90
+        pos_np[:, 1] = np.sin(np.arange(N) * 1.2) * 0.65
+        pos_np += rng.normal(0.0, 0.08, size=(N, 3))
 
         f_np, _, _ = compute_all_forces(
             pos_np,
