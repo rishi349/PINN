@@ -222,11 +222,11 @@ def check_force_parity(cfg, device):
     rng = np.random.default_rng(123)
     max_rel_err = 0.0
     for N in [30, 60, 120]:
-        # Compact random-walk-like configuration so both FENE bonds (< R0) and non-bonded WCA (< r_cut) are active
+        # Compact zig-zag configuration so both FENE bonds (< R0) and non-bonded WCA (< r_cut) are active
         pos_np = np.zeros((N, 3), dtype=np.float64)
-        pos_np[:, 0] = np.arange(N) * 0.90
-        pos_np[:, 1] = np.sin(np.arange(N) * 1.2) * 0.65
-        pos_np += rng.normal(0.0, 0.08, size=(N, 3))
+        pos_np[:, 0] = np.arange(N) * 0.45
+        pos_np[:, 1] = np.sin(np.arange(N) * 1.5) * 0.45
+        pos_np += rng.normal(0.0, 0.03, size=(N, 3))
 
         f_np, _, _ = compute_all_forces(
             pos_np,
