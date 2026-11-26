@@ -54,10 +54,10 @@ def compute_forces_instrumented(positions, sim):
     epsilon = sim.epsilon
     r_cut = sigma * 2.0 ** (1.0 / 6.0)
 
-    # --- Bonded forces (unchanged) ---
+    # --- Bonded forces (including FENE+WCA bonded repulsion) ---
     f_bond, pe_bond = compute_bonded_forces(
         positions, bond_type=sim.bond_type, k_bond=sim.k_bond, r0=sim.r0,
-        k_fene=sim.k_fene, R0_fene=sim.R0_fene
+        k_fene=sim.k_fene, R0_fene=sim.R0_fene, epsilon=epsilon, sigma=sigma
     )
 
     # --- Nonbonded forces with clamp counting ---

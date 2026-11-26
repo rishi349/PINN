@@ -194,8 +194,8 @@ def main():
                         help="Directory containing trajectory files")
     parser.add_argument("--output", type=str, default="reports/drafts/simulator_validation.md",
                         help="Output path for validation report")
-    parser.add_argument("--expected-bond-length", type=float, default=1.06,
-                        help="Expected mean bond length (1.06 for harmonic+WCA, 0.965 for FENE+WCA)")
+    parser.add_argument("--expected-bond-length", type=float, default=None,
+                        help="Expected mean bond length (auto: 0.97 for fene, 1.06 for harmonic)")
     args = parser.parse_args()
 
     print(f"Loading trajectories from {args.data_dir}...")
@@ -206,9 +206,14 @@ def main():
         print("No trajectories found. Run simulations first.")
         return
 
+    expected_bl = args.expected_bond_length
+    if expected_bl is None:
+        bond_type = trajectories[0].get("metadata", {}).get("bond_type", "fene")
+        expected_bl = 0.97 if bond_type == "fene" else 1.06
+
     print("Running validation checks (§13.1)...")
     results = [
-        check_bond_lengths(trajectories, args.expected_bond_length),
+        check_bond_lengths(trajectories, expected_bl),
         check_no_overlaps(trajectories),
         check_no_blowups(trajectories),
         check_rg_consistency(trajectories),

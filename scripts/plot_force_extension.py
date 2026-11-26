@@ -129,20 +129,24 @@ def measure_force_at_extension(
     import copy
     cfg = copy.deepcopy(config)
     cfg["chain"]["N"] = N
-    cfg["integrator"]["dt"] = 0.001
     cfg["box"]["L"] = max(10 * N, 200.0)
 
     sim = NumpySimulator(cfg)
     rng = np.random.default_rng(seed)
 
-    # ── initial configuration: straight chain along x ────────────────────────
-    # Always init at spacing >= sigma to avoid WCA core overlap.
-    # After equil the interior beads will relax to their constrained equilibrium.
+    # ── initial configuration: endpoints fixed at x = ±z_target/2 ──────────
+    # Place interior beads in a V-shape if z_target < (N-1)*b_eq so every bond
+    # starts at b_eq (safe for FENE < R0) with no non-bonded WCA overlaps.
     sigma_wca = cfg["wca"]["sigma"]
-    safe_spacing = max(sigma_wca * 1.05, z_target / max(N - 1, 1))
-    init_span = safe_spacing * (N - 1)
+    b_eq = 0.97 * sigma_wca if sim.bond_type == "fene" else sim.r0
+    L_eq = b_eq * max(N - 1, 1)
     pos = np.zeros((N, 3))
-    pos[:, 0] = np.linspace(-init_span / 2.0, init_span / 2.0, N)
+    pos[:, 0] = np.linspace(-z_target / 2.0, z_target / 2.0, N)
+    if z_target < L_eq and N >= 3:
+        half = (N - 1) / 2.0
+        h_apex = np.sqrt(max((b_eq * half) ** 2 - (z_target / 2.0) ** 2, 0.0))
+        idx = np.arange(N, dtype=float)
+        pos[:, 1] = h_apex * (1.0 - np.abs(idx - half) / half)
 
     dt = sim.dt
 
@@ -252,7 +256,8 @@ def main():
     config = load_config(config_path)
 
     N       = args.N
-    b       = config["bond"]["r0"]          # equilibrium bond length (sigma)
+    bond_type = config["bond"]["type"]
+    b       = (0.965 * config["wca"]["sigma"]) if bond_type == "fene" else config["bond"]["r0"]
     kBT     = config["thermostat"]["kBT"]
     L_c     = (N - 1) * b                  # contour length
     # Persistence length: for harmonic bond, Lp ~ k_bond * b / kBT (stiff rod limit)
