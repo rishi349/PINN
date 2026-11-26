@@ -385,13 +385,17 @@ def main():
     ax.set_ylabel("Force F (epsilon/sigma)", fontsize=13)
     ax.set_title(f"Force vs Extension  (N={N})", fontsize=14)
     ax.set_xlim(left=0)
-    ax.set_ylim(bottom=0)
-    ax.legend(fontsize=9, framealpha=0.2, labelcolor="#e8eaf6",
+    if valid.any():
+        y_top = max(float(np.nanmax(F_arr[valid] + 2 * S_arr[valid])) * 1.35, 1.0)
+        ax.set_ylim(0, y_top)
+    else:
+        ax.set_ylim(bottom=0)
+    ax.legend(loc="upper left", fontsize=9, framealpha=0.2, labelcolor="#e8eaf6",
               facecolor="#1a1d27", edgecolor="#3a3d52")
 
     # inset annotation
     ax.text(
-        0.05, 0.95,
+        0.02, 0.62,
         f"N={N}, b={b}, kBT={kBT}\n"
         f"L_c = {L_c:.2f} sigma\n"
         f"k_spring (sim) = {spring_const:.4f}",
@@ -422,8 +426,11 @@ def main():
     ax.set_ylabel("Reduced force F*L_c / kBT", fontsize=13)
     ax.set_title("Normalized Force-Extension", fontsize=14)
     ax.set_xlim(0, 1)
-    ax.set_ylim(bottom=0)
-    ax.legend(fontsize=9.5, framealpha=0.2, labelcolor="#e8eaf6",
+    if valid.any():
+        ax.set_ylim(0, y_top * L_c / kBT)
+    else:
+        ax.set_ylim(bottom=0)
+    ax.legend(loc="upper left", fontsize=9.5, framealpha=0.2, labelcolor="#e8eaf6",
               facecolor="#1a1d27", edgecolor="#3a3d52")
 
     fig.suptitle(
