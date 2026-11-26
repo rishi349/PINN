@@ -617,7 +617,7 @@ def compute_all_forces(
     force_magnitudes = np.linalg.norm(total_forces, axis=1, keepdims=True)
     clipping_mask = force_magnitudes > F_MAX
     if np.any(clipping_mask):
-        scale = np.where(clipping_mask, F_MAX / force_magnitudes, 1.0)
+        scale = np.where(clipping_mask, F_MAX / np.maximum(force_magnitudes, 1e-30), 1.0)
         total_forces = total_forces * scale
 
     return total_forces, pe_bond, pe_nonbond
